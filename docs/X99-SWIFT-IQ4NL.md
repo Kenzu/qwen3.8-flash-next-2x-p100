@@ -18,6 +18,8 @@
 
 ## Experimental Pascal MMQ
 
+[Two-P100 MMQ benchmark results](X99-SWIFT-MMQ.md)
+
 Build the two-card engine with `CARDS=2 PF_JOB=96 bash build.sh`. Set `FNX_PF_MMQ=1` in the Swift run profile to select ggml's Pascal IQ4_NL tile loader, quantized dot product and output writer for regular routed-expert prefill. Gate/up packs each input row once and shares it between its routed experts. Down packs the SwiGLU rows and handles each card's 320-column slice. Both use the existing expert pointer tables. The default is `0`. Keep `FNX_PF_MOE_Q8=0` in both benchmark profiles.
 
 The standalone numerical check uses one P100 and synthetic IQ4_NL weights. It covers the 2,560-column gate/up and 320-column down projections, partial tiles, repeated inputs, scattered outputs and both forms of expert addressing.
