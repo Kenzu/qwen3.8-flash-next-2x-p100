@@ -161,7 +161,13 @@ Engine::Engine(Model& m, int max_ctx, int lanes) : m_(m), max_ctx_(max_ctx) {
         for (int cc = 0; cc < NCARD; ++cc) ratio = std::min(ratio, (double) kvp_page(cc, false) / kvp_page(cc, true));
         ctx_pages = (int) (ctx_pages * ratio);
     }
-    int n_pages = ctx_pages + extra_pages;
+    const bool full_contexts = env_flag("FNX_FULL_CONTEXTS");
+    const int pages_per_context = max_ctx / KVP_POS + 2;
+    const long long full_pages = (long long) pages_per_context * std::max(lanes, 1) + extra_pages;
+    if (full_contexts && full_pages > INT32_MAX / KVP_POS)
+        throw std::runtime_error("FNX_FULL_CONTEXTS: aggregate token count exceeds the supported range");
+    const int required_pages = full_contexts ? (int) full_pages : pages_per_context + extra_pages;
+    int n_pages = std::max(ctx_pages + extra_pages, required_pages);
     // FNX_PEER (AMD only; hip/peer_policy.hpp has the rules: 0 host exchange, 1 try the peer push, unset the build's default): every directed pair is probed at start
     // (kernel stores into the peer, a full read-back compare on both sides, a flag round trip); any failure leaves the host exchange for the whole run with one line.
     // FNX_PEER_PARTS: 1 the window sums, 2 the attention merge, 3 both (the default)
@@ -529,7 +535,7 @@ Engine::Engine(Model& m, int max_ctx, int lanes) : m_(m), max_ctx_(max_ctx) {
             // each pool gives its share of what the prompt path holds, by bytes (FNX_PF_TAIL_MIB: its buffers and stages at FNX_PF_ROWS 4096);
             // the arena pool no more than K/V can spare at the largest context, the other pools the rest
             const size_t want = (size_t) env_int("FNX_PF_TAIL_MIB", 2450) << 20;
-            const int need_pages = max_ctx / KVP_POS + 2 + extra_pages;
+            const int need_pages = required_pages;
             for (int c = 0; c < NCARD; ++c) {
                 const ExpertCache& ec = m.cards[c].ec;
                 const int ap = ec.arena_pool, least = 2 * MAXT * TOPK;
@@ -565,7 +571,10 @@ Engine::Engine(Model& m, int max_ctx, int lanes) : m_(m), max_ctx_(max_ctx) {
         }
         // FNX_EXPERT_DYN_GIB: the K/V pool grows only into the arena pool's dynamic slots; short of the context, a long request
         // would find it full half-way, so the load says so now
-        if (const int need = max_ctx / KVP_POS + 2 + extra_pages; !m.perm.empty() && arena_cap_ < need)
+        if (full_contexts && arena_cap_ < required_pages)
+            throw std::runtime_error("FNX_FULL_CONTEXTS: " + std::to_string(arena_cap_) + " pages available, " +
+                                     std::to_string(required_pages) + " required for " + std::to_string(lanes) + " full contexts");
+        if (const int need = required_pages; !m.perm.empty() && arena_cap_ < need)
             throw std::runtime_error("FNX_EXPERT_DYN_GIB: the K/V pool reaches " + std::to_string(arena_cap_ * KVP_POS) + " positions, --max-context " +
                                      std::to_string(max_ctx) + " needs " + std::to_string(need - arena_cap_) + " more pages (" +
                                      std::to_string((size_t) (need - arena_cap_) * kvp_page(0) * sizeof(uint16_t) >> 20) +

@@ -627,6 +627,10 @@ after about 5 minutes; then the API is at `http://127.0.0.1:8080/v1`.
 | `--batch` | 1 | one request at a time |
 | `--vision` | | pictures through the encoder |
 
+To give every active sequence its full context at the same time, set `FNX_FULL_CONTEXTS=1` in the profile's `env` block.
+The split engine sizes its shared K/V pool for `--batch` full sequences at `--max-context` tokens each, plus per-lane overhead.
+Startup fails if the arena cannot reach that capacity. Expert placement and prompt scratch space still need to fit on each card.
+
 The `env` block holds 38 `FNX_*` switches. The ones that matter most for speed: `FNX_EXPERT_RAM_GIB=29.0` (how much of
 the experts stays in RAM only), `FNX_P100_DMA=1` with `FNX_DMA_SPLIT=2` and `FNX_PREFETCH=1` (copying missing experts),
 `FNX_PF_JOBV=7`, `FNX_PF_STAGE_ALL=1`, `FNX_PF_SP=1` and `FNX_PF_F16ACC=1` (reading), `FNX_P100_ATTN_DEC=1` (attention
