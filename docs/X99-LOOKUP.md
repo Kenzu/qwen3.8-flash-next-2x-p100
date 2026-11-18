@@ -25,3 +25,7 @@ python3 bench/bench.py --strata-dir "$DATA/strata-v0.2.9" \
     --url http://127.0.0.1:18080 --wait 6 --ours iq3_s \
     --tests fresh,edit,long,medium,image --out "$DATA/lookup-control-results.json"
 ```
+
+### Optional continuation length experiment
+
+With four sources enabled, set `FNX_LOOKUP_EXTEND_MIN` to `"8"` to propose the full lookup window when the matching history covers at least eight tokens. Smaller matches keep the upstream length rule. The existing lookup limit, image boundary and end of available history still cap each proposal. The default of zero disables extension. This tests the continuation-length choice separately from multi-source search.
