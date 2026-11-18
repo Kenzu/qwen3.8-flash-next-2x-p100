@@ -117,12 +117,12 @@ Gguf::Gguf(const std::string& first) {
     convert_small_tensors();
 }
 
-// A file with routed experts in the IQ types or Strata's 2-bit type (the ISTA IQ3_S set) also keeps its dense matrices, routers,
-// embeddings and projections in K-quants, IQ4_XS and BF16, which the engine does not read. Those are dequantized and written
-// again as Q8_0 (F32 for the small ones), once, here; the routed experts are left as they are. A file without such experts
-// (UD-Q4_K_XL, Q8_0) is not touched at all: the check below is the only difference for it.
+// ISTA's mixed GGUFs and Swift IQ4_NL encode some dense weights in types the engine's dense path cannot read.
+// Convert those tensors once at load. The native expert kernels keep their input formats.
 void Gguf::convert_small_tensors() {
-    bool mixed = false;
+    const auto embedding = tensors_.find("token_embd.weight");
+    bool mixed = embedding != tensors_.end() && embedding->second.type == T_IQ4_NL &&
+                 tensors_.count("per_layer_token_embd.weight") != 0;
     for (const auto& kv : tensors_)
         mixed |= kv.second.type == T_IQ2_S || kv.second.type == T_IQ3_XXS || kv.second.type == T_IQ3_S || kv.second.type == T_Q2_0 ||
                  kv.second.type == T_IQ2_XXS || kv.second.type == T_IQ1_M;
