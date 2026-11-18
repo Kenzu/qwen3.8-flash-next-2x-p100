@@ -6,6 +6,7 @@
 #include "../src/gguf.hpp"
 #include "../src/rope_gguf.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -36,8 +37,9 @@ struct Kv {
     void f32(const std::string& k, float v) { key(k, 6); put(&v, 4); }
 };
 
-// one F32 tensor "w" with the given n_dims and sizes, its data at offset 0 of the data section, data_bytes of data
-std::vector<uint8_t> make(uint32_t n_dims, const std::vector<uint64_t>& ne, uint64_t data_bytes, uint64_t offset = 0, const Kv& kv = {}) {
+// One tensor with the given dimensions and offset, zero-filled after the header.
+std::vector<uint8_t> make(uint32_t n_dims, const std::vector<uint64_t>& ne, uint64_t data_bytes,
+                          uint64_t offset = 0, const Kv& kv = {}, const std::string& name = "w", uint32_t type = fnx::T_F32) {
     std::vector<uint8_t> b;
     auto put = [&](const void* p, size_t n) { b.insert(b.end(), (const uint8_t*) p, (const uint8_t*) p + n); };
     auto u32 = [&](uint32_t v) { put(&v, 4); };
@@ -47,12 +49,11 @@ std::vector<uint8_t> make(uint32_t n_dims, const std::vector<uint64_t>& ne, uint
     u64(1);             // tensors
     u64(kv.n);          // metadata keys
     put(kv.b.data(), kv.b.size());
-    const std::string name = "w";
     u64(name.size());
     put(name.data(), name.size());
     u32(n_dims);
     for (uint64_t v : ne) u64(v);
-    u32(0);             // F32
+    u32(type);
     u64(offset);
     while (b.size() % 32) b.push_back(0);
     b.resize(b.size() + data_bytes, 0);
@@ -87,6 +88,30 @@ void expect_refused(const std::string& dir, const std::string& tag, const std::v
 
 int main(int argc, char** argv) {
     const std::string dir = argc > 1 ? argv[1] : "/tmp";
+
+    {
+        const char* names[] = {"token_embd.weight", "per_layer_token_embd.weight", "blk.0.ffn_gate_exps.weight"};
+        std::vector<std::string> paths;
+        for (int i = 0; i < 3; ++i) {
+            auto b = make(2, {32, 1}, 18, 0, {}, names[i], fnx::T_IQ4_NL);
+            auto block = b.end() - 18;
+            block[1] = 0x3c;   // scale 1.0 in FP16
+            std::fill(block + 2, b.end(), 0xf0);   // codebook values -127 and 113
+            paths.push_back(write(dir, "swift-0000" + std::to_string(i + 1) + "-of-00003", b));
+        }
+        fnx::Gguf g(paths.front());
+        const auto& emb = g.t(names[0]);
+        bool ok = g.converted() == 1 && emb.type == fnx::T_Q8_0 && emb.nbytes == 34;
+        for (int i = 0; ok && i < 16; ++i)
+            ok = emb.data[0] == 0 && emb.data[1] == 0x3c && static_cast<int8_t>(emb.data[2+i]) == -127 && emb.data[18+i] == 113;
+        for (int i = 1; i < 3; ++i) {
+            const auto& native = g.t(names[i]);
+            ok = ok && native.type == fnx::T_IQ4_NL && native.shard == i && native.nbytes == 18 && native.data[2] == 0xf0;
+        }
+        std::printf("%s Swift IQ4_NL embedding, PLE and routed expert\n", ok ? "ok  " : "FAIL");
+        failures += !ok;
+        for (const auto& path : paths) std::remove(path.c_str());
+    }
 
     {
         const std::string path = write(dir, "valid", make(2, {8, 3}, 8 * 3 * 4));
