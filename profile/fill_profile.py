@@ -17,7 +17,7 @@
 --route-prior FNX_ROUTE_PRIOR: 0 (default) is exact; 0.15 is our production setting, faster and lossy (README)
 --draft-vocab another draft vocabulary than engine/data/draft_vocab_sl.bin, e.g. engine/data/draft_vocab_en.bin
 --exe        the engine, if build.sh was run with another build directory (default build/split/strata-split-2)
---gpu        the two P100 as nvidia-smi numbers them (default "0,1")
+--gpu        two P100 cards (default "0,1") or three for full IQ3_S, as numbered by nvidia-smi
 --ram        96 (default): the template as it is; 64: the 64 GB mode (README, "64 GB of RAM"; IQ3_S only): FNX_PLE_RAM=0,
              FNX_EXPERT_DYN_GIB=13, --max-context 262144 without YaRN, --conversation-cache-mib 2000
 --coder      FNX_EXPERT_MASK=engine/data/coder_mask.txt: the router picks only from the 256 experts a layer that
@@ -56,7 +56,7 @@ def main():
     ap.add_argument("--logs", default="/var/tmp")
     ap.add_argument("--route-prior", default="0")
     ap.add_argument("--draft-vocab", help="another draft vocabulary (default engine/data/draft_vocab_sl.bin)")
-    ap.add_argument("--exe", default=str(RELEASE / "build" / "split" / "strata-split-2"))
+    ap.add_argument("--exe", help="split-engine binary (default: build/split/strata-split-N for N selected cards)")
     ap.add_argument("--gpu", default="0,1")
     ap.add_argument("--ram", choices=["96", "64"], default="96", help="64: the 64 GB mode (README, \"64 GB of RAM\")")
     ap.add_argument("--coder", action="store_true", help="only the Coder release's experts (README, \"Coder\")")
@@ -70,11 +70,16 @@ def main():
         sys.exit("--ram 64: only with --model iq3_s (UD-Q4_K_XL's experts alone are 72 GiB)")
     if a.coder and a.model == "edge0":
         sys.exit("--coder: not with --model edge0 (the Coder's list names Flash-Next's experts, not Edge0's latent ones)")
-    cards = a.gpu.split(",")
-    if len(cards) != 2 or not all(c.strip().isdigit() for c in cards) or cards[0].strip() == cards[1].strip():
-        sys.exit("--gpu: two different card numbers, e.g. 0,1")
+    cards = [c.strip() for c in a.gpu.split(",")]
+    if len(cards) not in (2, 3) or not all(c.isascii() and c.isdigit() for c in cards):
+        sys.exit("--gpu: two or three distinct non-negative card indices")
+    if len(set(map(int, cards))) != len(cards):
+        sys.exit("--gpu: each card must have a different index")
+    if len(cards) == 3 and (a.model != "iq3_s" or a.ram != "96" or a.coder):
+        sys.exit("The three-card profile is for the full IQ3_S model in 512k mode")
+    exe = Path(a.exe) if a.exe else RELEASE / "build" / "split" / f"strata-split-{len(cards)}"
     template, files = MODELS[a.model]
-    values = {"{{RELEASE}}": str(RELEASE), "{{EXE}}": str(Path(a.exe).resolve()),
+    values = {"{{RELEASE}}": str(RELEASE), "{{EXE}}": str(exe.resolve()),
               "{{MODELS}}": str(Path(a.models).resolve()), "{{MTP}}": str(Path(a.mtp).resolve()),
               "{{TOKENIZER}}": str(Path(a.tokenizer).resolve()), "{{LOGS}}": str(Path(a.logs).resolve()),
               "{{VISION_EXE}}": str(Path(a.vision_exe).resolve()) if a.vision_exe else "", "{{ROUTE_PRIOR}}": a.route_prior}
@@ -91,7 +96,10 @@ def main():
         return x
 
     cfg = fill(json.loads(Path(a.template or HERE / template).read_text(encoding="utf-8")))
-    cfg["gpu"] = ",".join(c.strip() for c in cards)
+    cfg["gpu"] = ",".join(cards)
+    if len(cards) == 3:
+        cfg["env"]["FNX_PF_SP"] = "0"
+        cfg["env"]["FNX_EXPERT_RAM_GIB"] = "15.0"
     if a.draft_vocab:
         cfg["args"][cfg["args"].index("--draft-vocab") + 1] = str(Path(a.draft_vocab).resolve())
     if not a.vision_exe:

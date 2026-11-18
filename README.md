@@ -1,5 +1,7 @@
 # Qwen3.8-Flash-Next on two Tesla P100
 
+This fork also runs the full GSQ-RCO IQ3_S on three PCIe P100 cards. [X99 build and benchmark instructions](docs/X99-P100.md)
+
 This is a port of Strata's all-cards split engine (`strata-split-2`) to the NVIDIA Tesla P100 (Pascal, sm_60). It runs
 **Qwen3.8-Flash-Next** on **two P100 16 GB** cards with MTP drafting and pictures, from either of two GGUF files, and
 since 15 Nov 2026 **Edge0-145B**, Flash-Next with its experts in a latent space. On our server, with this repository's

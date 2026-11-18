@@ -207,7 +207,7 @@ __device__ __forceinline__ void jobv_finish(const uint4* tab, const Tabs& t, con
 }
 
 // one tile's products with lanes of RL rows x TL tokens: 128 / RL row groups by NT RL / 128 token groups
-template <int TY, int NT, int RL, int TL, bool PF, int NBX = k4NB>
+template <int TY, int NT, int RL, int TL, bool PF, int NBX = k4NB, bool TAIL = false>
 __device__ __forceinline__ void jobv_tile(const JobArgs& a, uint4* const sm, const BigJob* const jg, const int t00, const int tend) {
     constexpr int KU = k4KU, SU = kSU<TY>, NB = NBX, TBX = NBX == k4NB ? NT / NB * k4TB : 2 * k4TB;   // jobv5: 64 rows x 96 tokens
     constexpr int NRG = NB / RL, TG = NT / NRG, TBm = TG * TL, XL = (TBm * KU + NT - 1) / NT;
@@ -305,9 +305,14 @@ __device__ __forceinline__ void jobv_tile(const JobArgs& a, uint4* const sm, con
                 }
             } else if (dj < KU / 4) {   // jobv5: 64 rows, a step's two runs on a row's first two of four lanes
                 uint32_t rw[RunWords<TY>::n];
-                run_load_s<TY>(gp, run0 + dj, rw);
                 uint4 o[4];
-                jobv_finish<TY, NT>(tab, t, rw, o);
+                if (!TAIL || (run0 + dj) * 4 < nu) {
+                    run_load_s<TY>(gp, run0 + dj, rw);
+                    jobv_finish<TY, NT>(tab, t, rw, o);
+                } else {
+#pragma unroll
+                    for (int q = 0; q < 4; ++q) o[q] = make_uint4(0, 0, 0, 0);
+                }
 #pragma unroll
                 for (int q = 0; q < 4; ++q) sw[dl * KU + 4 * dj + q] = o[q];
             }
@@ -321,7 +326,8 @@ __device__ __forceinline__ void jobv_tile(const JobArgs& a, uint4* const sm, con
             uint4 v[XL];
 #pragma unroll
             for (int q = 0; q < XL; ++q)
-                if (xi[q] >= 0) v[q] = __ldg(X + std::size_t(xi[q]) * ldx_u + u0 + (tid & (KU - 1)));
+                if (xi[q] >= 0) v[q] = (!TAIL || u0 + (tid & (KU - 1)) < nu)
+                    ? __ldg(X + std::size_t(xi[q]) * ldx_u + u0 + (tid & (KU - 1))) : make_uint4(0, 0, 0, 0);
 #pragma unroll
             for (int q = 0; q < XL; ++q)
                 if (xi[q] >= 0) sx[tid + q * NT] = v[q];
@@ -390,7 +396,7 @@ __global__ void k_job_v(JobArgs a) {
 
 // FNX_PF_JOBV 5 (jobv5_patch.py): block (64 rows, a job of at most 96 tokens), two blocks an SM
 template <int TY, int NT> inline constexpr int kJobV64Smem = (64 * k4KU + 2 * k4TB * k4KU + 64 * kSU<TY> + kJobVTab<TY, NT>) * 16;
-template <int TY, int NT>
+template <int TY, int NT, bool TAIL = false>
 __launch_bounds__(NT, 2)
 __global__ void k_job_v64(JobArgs a) {
     extern __shared__ uint4 sm[];
@@ -402,12 +408,12 @@ __global__ void k_job_v64(JobArgs a) {
     jobv_tabs<TY, NT>(a.t, sm + 64 * k4KU + 2 * k4TB * k4KU + 64 * kSU<TY>, int(threadIdx.x));
     __syncthreads();
     const int nt = tend;
-    if (nt > 72) jobv_tile<TY, NT, 4, 6, false, 64>(a, sm, jg, 0, tend);
-    else if (nt > 48) jobv_tile<TY, NT, 2, 9, false, 64>(a, sm, jg, 0, tend);
-    else if (nt > 36) jobv_tile<TY, NT, 2, 6, false, 64>(a, sm, jg, 0, tend);
-    else if (nt > 24) jobv_tile<TY, NT, 1, 9, false, 64>(a, sm, jg, 0, tend);
-    else if (nt > 12) jobv_tile<TY, NT, 1, 6, false, 64>(a, sm, jg, 0, tend);
-    else jobv_tile<TY, NT, 1, 3, false, 64>(a, sm, jg, 0, tend);
+    if (nt > 72) jobv_tile<TY, NT, 4, 6, false, 64, TAIL>(a, sm, jg, 0, tend);
+    else if (nt > 48) jobv_tile<TY, NT, 2, 9, false, 64, TAIL>(a, sm, jg, 0, tend);
+    else if (nt > 36) jobv_tile<TY, NT, 2, 6, false, 64, TAIL>(a, sm, jg, 0, tend);
+    else if (nt > 24) jobv_tile<TY, NT, 1, 9, false, 64, TAIL>(a, sm, jg, 0, tend);
+    else if (nt > 12) jobv_tile<TY, NT, 1, 6, false, 64, TAIL>(a, sm, jg, 0, tend);
+    else jobv_tile<TY, NT, 1, 3, false, 64, TAIL>(a, sm, jg, 0, tend);
 }
 
 // ---- FNX_PF_JOBV 7 (jobv7_patch.py, idea 57): mode 4's tiles, a lane's run words straight from the expert two steps ahead
@@ -560,7 +566,8 @@ void jobv_launch(const JobArgs& a, int njobs_cap, int mode, cudaStream_t s) {
     if constexpr (kJobVSmem<TY, 256> <= 48 * 1024) {
         if (mode == 5) {
             static_assert(PF_JOB <= 2 * k4TB, "jobv5: a job in one tile of 96");
-            k_job_v64<TY, 256><<<dim3(unsigned((a.N + 63) / 64), njobs_cap), 256, kJobV64Smem<TY, 256>, s>>>(a);
+            if (a.K % 64) k_job_v64<TY, 256, true><<<dim3(unsigned((a.N + 63) / 64), njobs_cap), 256, kJobV64Smem<TY, 256>, s>>>(a);
+            else k_job_v64<TY, 256, false><<<dim3(unsigned((a.N + 63) / 64), njobs_cap), 256, kJobV64Smem<TY, 256>, s>>>(a);
             return;
         }
         if (mode >= 2) {
@@ -578,7 +585,7 @@ void jobv_launch(const JobArgs& a, int njobs_cap, int mode, cudaStream_t s) {
 // mode 0: k_gemm4_job; 1, 2, 3, 4: FNX_PF_JOBV's kernel (the same bits)
 void p100_moe_mode(const DW& A, size_t sa, const BigJob* jobs, const int* njobs, int njobs_cap, const uint16_t* x, float* out, int mode, void* st) {
     cudaStream_t s = (cudaStream_t) st;
-    if (A.n_in % 64) throw std::runtime_error("p100 moe: columns not in units of 64");
+    if (A.n_in % 32) throw std::runtime_error("p100 moe: columns not in units of 32");
     JobArgs a{};
     a.t = tabs(s);
     a.wa = (const char*) A.p;
@@ -594,6 +601,11 @@ void p100_moe_mode(const DW& A, size_t sa, const BigJob* jobs, const int* njobs,
     a.K = A.n_in;
     if (mode == 6) mode = A.n_in <= 640 ? 5 : 4;   // jobv6: down (K 320 a card) on mode 5's tiles, gate|up on mode 4
     if (mode == 7) mode = A.n_in <= 640 ? 5 : 7;   // jobv7: down as 6, gate|up on k_job_v7 (IQ2_S on mode 4)
+    if (A.n_in % 64) {
+        if (mode != 5) throw std::runtime_error("p100 moe: 32-column tail requires down kernel 5");
+        if (A.type != T_Q4_0 && A.type != T_IQ4_NL && A.type != T_Q5_1 && A.type != T_Q8_0)
+            throw std::runtime_error("p100 moe: unsupported expert type for a 32-column tail");
+    }
     a.fit = mode >= 3;   // jobv4: mode 4 is 3 with its loads ahead; jobv5: mode 5 its own kernel
 #define P100_JOB(TY) (mode > 0 ? jobv_launch<TY>(a, njobs_cap, mode, s) : job_launch<TY>(a, njobs_cap, s))
     switch (A.type) {

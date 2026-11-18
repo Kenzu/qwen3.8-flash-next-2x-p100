@@ -22,7 +22,7 @@ set(STRATA_ENABLE_HIP OFF)
 set(STRATA_BUILD_SPLIT ON)
 option(STRATA_BUILD_TESTS "also build sFNX's CPU unit tests and test drivers (not run for this release)" OFF)
 set(STRATA_SPLIT_ARCH "60" CACHE STRING "compute capability the engine is built for (Tesla P100: 60)")
-set(STRATA_SPLIT_CARDS "2" CACHE STRING "card counts to build (only 2 has been run on P100)")
+set(STRATA_SPLIT_CARDS "2" CACHE STRING "card counts to build (2 and 3 have been run on P100)")
 set(STRATA_SPLIT_PF_JOB "64" CACHE STRING "rows of one expert per prompt-path job (build.sh passes 96, our production for all three models)")
 set(STRATA_GGML_DIR "" CACHE PATH "llama.cpp checkout at the pinned commit (its ggml-cuda headers)")
 
@@ -40,7 +40,7 @@ endif()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/engine split)
 
 # p100_compat.h is force-included in every CUDA source (sm_60 has no dp4a or nanosleep), as in the production build
-foreach(_t strata-split-2 strata-split-3 strata-split-4 split_fnx_run split_moe_tile_test)
+foreach(_t strata-split-2 strata-split-3 strata-split-4 split_fnx_run split_moe_tile_test split_p100_tail_test)
   if(TARGET ${_t})
     target_compile_options(${_t} PRIVATE
                            "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/engine/p100_compat.h>")

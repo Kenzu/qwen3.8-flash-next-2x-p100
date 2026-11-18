@@ -90,10 +90,17 @@ DATA=$(abspath "$DATA")
 MODELS=$(abspath "${MODELS:-$DATA/models}")
 STRATA=$(abspath "${STRATA:-$DATA/strata-v0.2.9}")
 PREP=$DATA/prep
-EXE=$HERE/build/split/strata-split-2
-GG=$HERE/third_party/llama.cpp
+CARDS=${CARDS:-2}
+case $CARDS in
+  2) GPU_LIST=0,1 ;;
+  3) GPU_LIST=0,1,2
+     [ "$MODEL:$RAM:$CODER" = iq3_s:96:0 ] || die "The three-card profile is for the full IQ3_S model in 512k mode" ;;
+  *) die "CARDS must be 2 or 3" ;;
+esac
+EXE=${B:-$HERE/build}/split/strata-split-$CARDS
+GG=${GG:-$HERE/third_party/llama.cpp}
 declare -A URL=([$MMPROJ]=$ISTA/$MMPROJ)
-for f in "${IQ3_S[@]}"; do URL[$f]=$ISTA/$f; done
+for f in "${IQ3_S[@]}"; do URL[$f]=$ISTA/IQ3_S/$f; done
 for f in "${Q4_K_XL[@]}"; do URL[$f]=$UNSLOTH/$f; done
 for f in "${EDGE0_FILES[@]}"; do URL[$f]=$EDGE0/${f#edge0-145b/}; done
 case $MODEL in
@@ -113,21 +120,20 @@ gb() { awk -v b="$1" 'BEGIN {printf "%.1f GB", b / 1e9}'; }
 [ -d "$GG/gguf-py/gguf" ] || die "no $GG/gguf-py: run 'bash build.sh' first (it fetches llama.cpp)"
 for t in git curl sha256sum python3; do command -v $t >/dev/null || die "$t is needed"; done
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || die "Python 3.10 or newer is needed"
-if grep -qs '^STRATA_SPLIT_PF_JOB:[A-Z]*=64$' "$HERE/build/CMakeCache.txt"; then
+if grep -qs '^STRATA_SPLIT_PF_JOB:[A-Z]*=64$' "${B:-$HERE/build}/CMakeCache.txt"; then
   say "note: this engine was built with prompt-path jobs of 64 rows; one built with the current 'bash build.sh' (96 rows) reads long prompts faster (README, \"Build\")"
 fi
 
-GPU_LIST=0,1
 if command -v nvidia-smi >/dev/null; then
-  p100=$( (nvidia-smi --query-gpu=index,name --format=csv,noheader || true) | awk -F', ' '/P100/ && n < 2 {print $1; n++}' | paste -sd, -)
-  if [ "$(echo "$p100" | tr ',' '\n' | grep -c .)" = 2 ]; then
+  p100=$( (nvidia-smi --query-gpu=index,name --format=csv,noheader || true) | awk -F', ' -v cards="$CARDS" '/P100/ && n < cards {print $1; n++}' | paste -sd, -)
+  if [ "$(echo "$p100" | tr ',' '\n' | grep -c .)" = "$CARDS" ]; then
     GPU_LIST=$p100
-    ok "two Tesla P100: cards $GPU_LIST"
+    ok "$CARDS Tesla P100: cards $GPU_LIST"
   else
-    say "WARNING: nvidia-smi does not show two Tesla P100 (found: ${p100:-none}); the profile names cards 0,1"
+    say "WARNING: nvidia-smi does not show $CARDS Tesla P100 (found: ${p100:-none}); the profile names cards $GPU_LIST"
   fi
 else
-  say "WARNING: no nvidia-smi; the profile names cards 0,1"
+  say "WARNING: no nvidia-smi; the profile names cards $GPU_LIST"
 fi
 mem_gib=$(awk '/^MemTotal:/ {print int($2 / 1048576)}' /proc/meminfo)
 if [ "$RAM" = 96 ] && [ "$MODEL" != iq3_s ] && [ "$mem_gib" -lt 88 ]; then
@@ -290,6 +296,7 @@ fi
 
 # ------------------------------------------------------------------ the run config
 CFG=$DATA/profile.json
+if [ "$CARDS" = 3 ]; then CFG=$DATA/profile-3gpu.json; fi
 if [ -f "$CFG" ]; then
   ok "run config $CFG (kept; delete it to write it again)"
 elif [ "$CHECK" = 1 ]; then
@@ -308,5 +315,5 @@ fi
 if [ "$CHECK" = 1 ]; then
   say "$TODO step(s) to do"
 else
-  say "done. Start it with: bash $HERE/run.sh $DATA"
+  say "done. Start it with: bash $HERE/run.sh $DATA --config $CFG"
 fi

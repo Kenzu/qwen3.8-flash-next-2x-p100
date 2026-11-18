@@ -766,7 +766,7 @@ void pf_ring(Engine::Pf& p, int g, float* x, int C, const RingMoe* m, unsigned* 
 // into base. Flags [set][0]: the rows are in; [set][1]: the receiver has them (the sender's next use of the set waits for that). Every
 // card makes the same calls in the same order (seq)
 void pf_gather(Engine::Pf& p, int g, float* base, int row_floats, int C, cudaStream_t s) {
-    static_assert(NCARD == 2, "pf_gather: two cards");
+    if constexpr (NCARD != 2) throw std::runtime_error("pf_gather: two cards; FNX_PF_SP must remain disabled on this build");
     const unsigned seq = ++p.gseq;
     const int set = (int) (seq & 1u), own = (g + 1) % NCARD, oth = g;
     auto r0 = [&](int k) { return k * C / NCARD; };
@@ -801,7 +801,7 @@ __global__ void k_lat_zadd(const __half* __restrict__ z, __half* __restrict__ r,
 // of this card's groups into lrx (pf_lat_zadd adds this card's, a pass later). Every card makes the same calls in the same order (lseq), and
 // the exchange is the last thing a card queues in its pass: the other card's send must be queued before this card queues more
 void pf_lat_swap(Engine::Pf& p, int h, int C, bool zs, cudaStream_t s) {
-    static_assert(NCARD == 2, "pf_lat_swap: two cards");
+    if constexpr (NCARD != 2) throw std::runtime_error("pf_lat_swap: two cards; FNX_LAT_SPLIT is unsupported on this build");
     if (!p.lrx || !p.lflags || !p.lnflags) throw std::runtime_error("FNX_LAT_SPLIT: the prompt path's latent exchange buffers");
     const unsigned seq = ++p.lseq;
     const int set = (int) (seq & 1u), own = h * LAT_HW, oth = (1 - h) * LAT_HW;   // lat16's columns: this card's groups, the other's

@@ -7,6 +7,7 @@
 #   PF_JOB=64 bash build.sh                         # the default until 17 Nov 2026: prompt-path jobs of 64 rows
 #
 # Environment:
+#   CARDS     2 (default) or 3 Pascal cards; the 3-card profile targets GSQ-RCO IQ3_S.
 #   PF_JOB    rows of one expert per prompt-path job, a compile-time constant: 96 (default: our production for all three
 #             models, UD-Q4_K_XL since 16 Nov 2026, Edge0-145B and IQ3_S since 17 Nov) or 64 (our production until then:
 #             the same bits, long prompts read slower). A binary built with either value runs every model.
@@ -23,6 +24,7 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 B=${B:-$HERE/build}
+CARDS=${CARDS:-2}
 JOBS=${JOBS:-8}
 PF_JOB=${PF_JOB:-96}
 GG=${GG:-$HERE/third_party/llama.cpp}
@@ -32,6 +34,7 @@ LLAMA_COMMIT=3cf03257f219afbe7334045ff7c6a06ac68c627d   # the commit Strata v0.2
 say() { echo "build.sh: $*"; }
 die() { echo "build.sh: $*" >&2; exit 1; }
 
+case $CARDS in 2|3) ;; *) die "CARDS must be 2 or 3";; esac
 case $PF_JOB in 64|96) ;; *) die "PF_JOB=$PF_JOB: 64 or 96 (the P100 kernels' jobs fill at most two tiles of 48 rows)";; esac
 
 # --- toolchain
@@ -60,13 +63,13 @@ say "llama.cpp headers at $LLAMA_COMMIT; engine/src/iq3s_x.cuh matches them"
 # --- configure and build (the production build: Release, sm_60, 2 cards, prompt-path jobs of 96 rows)
 cmake -S "$HERE" -B "$B" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CUDA_COMPILER="$NVCC" -DCMAKE_CUDA_HOST_COMPILER="$HOSTCXX" -DCMAKE_CXX_COMPILER="$HOSTCXX" \
-  -DCMAKE_CUDA_ARCHITECTURES=60 -DSTRATA_SPLIT_ARCH=60 -DSTRATA_SPLIT_CARDS=2 -DSTRATA_SPLIT_PF_JOB="$PF_JOB" \
+  -DCMAKE_CUDA_ARCHITECTURES=60 -DSTRATA_SPLIT_ARCH=60 -DSTRATA_SPLIT_CARDS="$CARDS" -DSTRATA_SPLIT_PF_JOB="$PF_JOB" \
   -DSTRATA_GGML_DIR="$GG" ${CUDA:+-DCUDAToolkit_ROOT="$CUDA"}
 say "building with $JOBS jobs, prompt-path jobs of $PF_JOB rows (a full build took about 20 minutes on 2 x Xeon Bronze 3106; kernels_p2.cu alone about 17)"
-nice -n 10 cmake --build "$B" --target strata-split-2 -j "$JOBS"
+nice -n 10 cmake --build "$B" --target "strata-split-$CARDS" -j "$JOBS"
 
 # --- checks on the result
-EXE=$B/split/strata-split-2
+EXE=$B/split/strata-split-$CARDS
 [ -x "$EXE" ] || die "no $EXE"
 peers=$(nm -D --undefined-only "$EXE" | grep -i peer || true)
 if [ -n "$peers" ]; then
