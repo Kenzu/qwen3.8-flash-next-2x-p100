@@ -94,7 +94,7 @@ It starts from `DATA/profile.json` (the profile `setup.sh` wrote, at `FNX_ROUTE_
 |---|---|---|
 | `prefetch` | `FNX_PREFETCH_WANT`, `FNX_PREFETCH_MIN_T`, `FNX_PREFETCH` | 2, 3, 4, 6, 9 guesses a row and off; then from 2 or 4 rows. With `--screen` the guesses are first compared in one load through `FNX_PREFETCH_FILE` (edits, forth and back), and only those ahead there get a load of their own |
 | `dma` | `FNX_DMA_SPLIT` | 0, 1, 2 |
-| `experts` | `FNX_EXPERT_RAM_GIB`, `FNX_EXPERT_DYN_GIB` | ±1 GiB in RAM only (less: more experts in VRAM, until the load refuses); ±2 GiB dynamic where the profile sets it |
+| `experts` | `FNX_EXPERT_RAM_GIB`, `FNX_EXPERT_DYN_GIB` | ±1 GiB in RAM only (less: more experts in VRAM, until the load refuses); ±2 GiB dynamic where the profile sets it, from its whole GiB (UD-Q4_K_XL's 18.430: 20 and 16) |
 | `ple` | `FNX_PLE_RAM` | the other setting, when the RAM allows |
 | `convcache` | `--conversation-cache-mib` | half, only when an arm came within 4 GiB of the RAM's end (RAM, not speed) |
 | `stage` (not by default) | `FNX_PF_STAGE_MIB`, `FNX_PF_TAIL_MIB` | half the staging buffers; 512 MiB more lent slots. Ours are at the size of the largest layer and smaller ones were slower |

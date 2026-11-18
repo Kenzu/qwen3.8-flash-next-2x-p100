@@ -38,8 +38,9 @@ INPUT_PATHS = ("docs", "src", "tools/collect_profile_traces.py")
 
 # Our numbers (2 x Tesla P100 16 GB PCIe x16 Gen3, 2 x Xeon Bronze 3106, 96 GB DDR4; profile/ with FNX_ROUTE_PRIOR=0): this
 # benchmark, each on a freshly loaded engine, one run each (README, "Our numbers"), on this folder's sources built with jobs of
-# 96 rows (build.sh's default; e56c3f60): UD-Q4_K_XL on 16 Nov 2026, IQ3_S and Edge0-145B on 17 Nov. Keys: --ours, or the model
-# the server reports (auto: q4_k_xl is the 512k profile; edge0 Edge0-145B's).
+# 96 rows (build.sh's default; e56c3f60): UD-Q4_K_XL on 16 Nov 2026, IQ3_S and Edge0-145B on 17 Nov, all before 18 Nov's switch
+# (FNX_MTP_NORM_STREAMS) and UD-Q4_K_XL settings, with which this benchmark has not been run (README, "Unsloth's UD-Q4_K_XL").
+# Keys: --ours, or the model the server reports (auto: q4_k_xl is the 512k profile; edge0 Edge0-145B's).
 REFERENCE = {
     "iq3_s": {   # the IQ3_S profile (512k); that morning's first run with pictures on this file (our rounds: first answer 2.6-2.7 s)
         "fresh": 66.45, "edit_py": 110.65, "edit_md": 115.8, "long_read": 1012.1, "long_write": 61.5,

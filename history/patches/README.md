@@ -1,6 +1,6 @@
 # Patch scripts (a record, not to be run)
 
-The scripts that made the last steps of the port (11-15 November 2026), as they were run on our build machine. Each
+The scripts that made the last steps of the port (11-17 November 2026), as they were run on our build machine. Each
 edits the development tree in place, checks that every edit matched as often as expected, and some save the original
 first. They name that machine's paths (`/srv/build/...`) and our test tools (`mikro/...`), which are not part of this
 release. Their changes are already in `engine/`; [docs/HISTORY.md](../../docs/HISTORY.md) says what each step did, and
@@ -25,9 +25,11 @@ release. Their changes are already in `engine/`; [docs/HISTORY.md](../../docs/HI
 | `edge0_patch3.py` | none | the latent branch in the overlapped prompt variant too (without it prompts of more than two chunks failed with "ring error 2") |
 | `edge0_patch4.py` | `FNX_LAT_DUMP`, `FNX_LAT_DUMP_L` | one layer's inputs and U output to files, for the NumPy check; build `1949d99c` |
 | `edge0_patch6.py` | `FNX_LAT_SPLIT` | build `f6088fde`: D and U by group across the cards, the prompt path's FFN half in three passes |
+| `mtp_norm_patch.py` | `FNX_MTP_NORM_STREAMS` | build `f28228d1` (`c213636c`'s sources with it, 96-row jobs): the RMS norm of the MTP draft layer's source takes each of a row's four hyper-connection streams on its own instead of the four as one vector (the idea from the Colibri engine's notes) |
 
 The 64 GB mode (`FNX_PLE_RAM`, `FNX_EXPERT_DYN_GIB`, `FNX_EXPERT_DYN_MIN`) was written in this repository, not by a script: our
 Q4 build took it from here. All of the above up to `warm_patch.py` are the sources of build `c213636c`; `maska_patch.py`
-applied to them gives build `40ef6d53`, and the five `edge0_patch*.py` applied to that, in the order above, give the sources in
-`engine/` (build `f6088fde`). `edge0_patch5.py` (D and U while writing on the P100 row kernel) was slower and was reverted; it
-is not here (docs/HISTORY.md, "Tried and dropped").
+applied to them gives build `40ef6d53`, and the five `edge0_patch*.py` applied to that, in the order above, give the sources of
+build `f6088fde`. `mtp_norm_patch.py` applied to those gives the sources in `engine/` (compiled with 96-row jobs on 17 Nov as
+`a7717235`, which has not run in a round); applied to `c213636c`'s, it gives those of build `f28228d1`. `edge0_patch5.py` (D
+and U while writing on the P100 row kernel) was slower and was reverted; it is not here (docs/HISTORY.md, "Tried and dropped").

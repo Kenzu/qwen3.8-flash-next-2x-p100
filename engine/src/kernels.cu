@@ -2835,6 +2835,22 @@ void rms_norm_rows(const float* x, const float* w, float* y, int rows, int n, fl
     k_rms_norm_rows<<<rows, 1024, 0, (cudaStream_t) st>>>(x, w, y, n, eps);
     ck_launch("rms_norm_rows");
 }
+namespace {
+// y[r][c] = x[r][c] / sqrt(mean(x[r][c]^2) + eps) * w[c], a block per stream (mtp_norm_patch.py)
+__global__ void k_rms_norm_streams(const float* x, const float* w, float* y, int hc, int n, float eps) {
+    __shared__ float sh[32];
+    const float* xr = x + (size_t) blockIdx.x * n;
+    const float* wr = w + (size_t) (blockIdx.x % hc) * n;
+    float s = 0.f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) s += xr[i] * xr[i];
+    const float r = rsqrtf(block_sum(s, sh) / (float) n + eps);
+    for (int i = threadIdx.x; i < n; i += blockDim.x) y[(size_t) blockIdx.x * n + i] = xr[i] * r * wr[i];
+}
+}  // namespace
+void rms_norm_streams(const float* x, const float* w, float* y, int rows, int hc, int n, float eps, void* st) {
+    k_rms_norm_streams<<<rows * hc, 1024, 0, (cudaStream_t) st>>>(x, w, y, hc, n, eps);
+    ck_launch("rms_norm_streams");
+}
 void add_streams(const float* h, const float* e, float* R, int T, void* st) {
     k_add_streams<<<dim3((D + 255) / 256, T), 256, 0, (cudaStream_t) st>>>(h, e, R);
     ck_launch("add_streams");

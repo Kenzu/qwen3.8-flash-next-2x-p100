@@ -5,7 +5,7 @@ This fork also runs the full GSQ-RCO IQ3_S on three PCIe P100 cards. [X99 build 
 This is a port of Strata's all-cards split engine (`strata-split-2`) to the NVIDIA Tesla P100 (Pascal, sm_60). It runs
 **Qwen3.8-Flash-Next** on **two P100 16 GB** cards with MTP drafting and pictures, from either of two GGUF files, and
 since 15 Nov 2026 **Edge0-145B**, Flash-Next with its experts in a latent space. On our server, with this repository's
-benchmark (see "Our numbers"):
+benchmark (see "Our numbers"; the UD-Q4_K_XL row is from 16 Nov, before 18 Nov's switch and settings):
 
 | Model file and profile | Context | RAM | Fresh writing | Edits (py / md) | Reading 38,862 tokens |
 |---|---:|---|---:|---:|---:|
@@ -28,13 +28,16 @@ on UD-Q4_K_XL. But it is a different, smaller model: it is worse outside code, a
 instruction given in Slovenian (see "Coder").
 
 The engine is one executable. [Strata](https://github.com/Niko1221/Strata)'s Python server (v0.2.9) drives it and gives
-you the OpenAI-compatible API, the tokenizer and the chat template. This repository holds the engine's sources exactly
+you the OpenAI-compatible API, the tokenizer and the chat template. This repository holds the engine's sources
 as our Edge0 production build was built from them (`e56c3f60` since 17 Nov 2026, with prompt-path jobs of 96 rows as
-`build.sh` builds them; `f6088fde` with 64 rows before): our Coder build (`40ef6d53`, our production engine for
-UD-Q4_K_XL plus the Coder switch, which when off gives our IQ3_S production engine's bits) plus Edge0's latent experts,
-which when off give our UD-Q4_K_XL production engine's bits (see "Our numbers"). It also has the build, run configs for
-each model, and the benchmark we measure with. The models are not included: you download them yourself (see "Prepare
-the model files").
+`build.sh` builds them; `f6088fde` with 64 rows before): our Coder build (`40ef6d53`, our UD-Q4_K_XL production engine
+of 13 Nov plus the Coder switch, which when off gives our IQ3_S production engine's bits) plus Edge0's latent experts,
+which when off give our UD-Q4_K_XL production engine's bits (see "Our numbers"). The one difference from those sources,
+since 18 Nov 2026, is a switch, `FNX_MTP_NORM_STREAMS`, which only the UD-Q4_K_XL profiles set: our UD-Q4_K_XL
+production engine since that day (`f28228d1`) is the sources of the one before it (`6ccc87af`) with the same change, not
+these sources. Unset, the engine makes the same calls as before (see "Unsloth's UD-Q4_K_XL" and "Known limitations").
+The repository also has the build, run configs for each model, and the benchmark we measure with. The models are not
+included: you download them yourself (see "Prepare the model files").
 
 - What is ours and what is Strata's: [NOTICE.md](NOTICE.md), file by file in [docs/PROVENANCE.md](docs/PROVENANCE.md),
   every change in [docs/upstream-v0.2.10.diff](docs/upstream-v0.2.10.diff).
@@ -44,14 +47,16 @@ the model files").
 
 ### This release, with the benchmark
 
-[bench/bench.py](bench/bench.py) through Strata v0.2.9's server, on this folder's sources built with prompt-path jobs of
-96 rows (`e56c3f60`; `build.sh`'s default, see "Build"), with the profiles as they are now in `profile/`. The IQ3_S
-columns ran on 17 Nov 2026 (09:24-09:44), the UD-Q4_K_XL columns on 16 Nov (19:30-19:50). That build gives the bits of
-our production engines for IQ3_S (`36409ddc`) and UD-Q4_K_XL (`6ccc87af`, both below) and is our production engine for
-Edge0-145B. Each profile was written by `profile/fill_profile.py`
-at `FNX_ROUTE_PRIOR=0` (exact, see "Exact and lossy") and run once, on a freshly loaded engine. Writing is at temperature 0
-unless marked. These are the benchmark's own inputs, so your run compares with them directly (it prints them beside
-yours). Edge0-145B's run, on 17 Nov, is in "Edge0-145B".
+[bench/bench.py](bench/bench.py) through Strata v0.2.9's server, on this folder's sources as they were before 18 Nov's
+switch, built with prompt-path jobs of 96 rows (`e56c3f60`; `build.sh`'s default, see "Build"). The IQ3_S columns ran on
+17 Nov 2026 (09:24-09:44) with the profiles as they are now in `profile/`, the UD-Q4_K_XL columns on 16 Nov
+(19:30-19:50) with its profiles as they were until 18 Nov (`FNX_EXPERT_RAM_GIB=52.5`, `FNX_EXPERT_DYN_GIB=18`,
+`FNX_MTP_NORM_STREAMS` unset). The benchmark has not been run with 18 Nov's UD-Q4_K_XL settings; our rounds with them
+are in "Unsloth's UD-Q4_K_XL". That build gives the bits of our production engines for IQ3_S (`36409ddc`) and, until
+18 Nov, UD-Q4_K_XL (`6ccc87af`, both below) and is our production engine for Edge0-145B. Each profile was written by
+`profile/fill_profile.py` at `FNX_ROUTE_PRIOR=0` (exact, see "Exact and lossy") and run once, on a freshly loaded
+engine. Writing is at temperature 0 unless marked. These are the benchmark's own inputs, so your run compares with them
+directly (it prints them beside yours). Edge0-145B's run, on 17 Nov, is in "Edge0-145B".
 
 | Test | IQ3_S, 512k | IQ3_S, 64 GB mode, 256k | UD-Q4_K_XL, 512k | UD-Q4_K_XL, 256k |
 |---|---:|---:|---:|---:|
@@ -64,10 +69,11 @@ yours). Edge0-145B's run, on 17 Nov, is in "Edge0-145B".
 | Picture (96 x 96 PNG, encoder on the CPU): time to the answer; writing after it (sampled) | 5.1 s; 52.9 | off | 6.5 s; 46.8 | 3.0 s; 47.0 |
 | Load, until the server reports loaded | 308 s | 244 s | 209 s | 201 s |
 
-- **This release's sources with Edge0** (`f6088fde`), with `FNX_LATENT` unset, against our UD-Q4_K_XL production engine
-  (`c213636c`) on the UD-Q4_K_XL 512k profile at `FNX_ROUTE_PRIOR=0`, in a test window on 15 Nov (round `izdaja1`): the
-  same first-token logits in 18 of 18 requests (KL 0) and the same speeds (fresh 52.5 against 51.0, edits 61.9 / 63.7
-  against 62.0 / 64.0 tok/s). The IQ3_S file could not be compared that day (its first shard was not on our server).
+- **This release's sources with Edge0** (`f6088fde`; before 18 Nov's switch), with `FNX_LATENT` unset, against our
+  UD-Q4_K_XL production engine (`c213636c`) on the UD-Q4_K_XL 512k profile at `FNX_ROUTE_PRIOR=0`, in a test window on
+  15 Nov (round `izdaja1`): the same first-token logits in 18 of 18 requests (KL 0) and the same speeds (fresh 52.5
+  against 51.0, edits 61.9 / 63.7 against 62.0 / 64.0 tok/s). The IQ3_S file could not be compared that day (its first
+  shard was not on our server).
 - **The same bits as our production.** On 13 Nov the engine that this repository's `build.sh` then built on our server
   (`f85a4aba`, 64-row jobs) ran the IQ3_S columns without pictures: fresh 66.6, edits 111.0 / 116.0, a cold read 954,
   medium reads 700 / 815 / 853 / 803 / 941 / 876 / 904; in the 64 GB mode 63.3, 93.6 / 101.9, 768 and 613 / 717 / 759 /
@@ -85,7 +91,9 @@ yours). Edge0-145B's run, on 17 Nov, is in "Edge0-145B".
   On 16 Nov the UD-Q4_K_XL runs above gave the first-token logits of 13 Nov's runs on `c213636c` in 29 of 29 requests
   each (512k and 256k). Our production engine for UD-Q4_K_XL since that day (`6ccc87af`: `c213636c`'s sources with
   96-row jobs) gave the 512k run's logits in 29 of 29 and its speeds (fresh 50.7, edits 62.7 / 63.8, a cold read 786,
-  medium reads 541 / 722 / 771 / 727 / 878 / 779 / 843, the picture 3.0 s; 45.8).
+  medium reads 541 / 722 / 771 / 727 / 878 / 779 / 843, the picture 3.0 s; 45.8). Since 18 Nov it is `f28228d1`
+  (`6ccc87af`'s sources with `FNX_MTP_NORM_STREAMS`), which with 18 Nov's settings gave `6ccc87af`'s first tokens in 81
+  of 81, 17 of 17 and 7 of 7 requests of our rounds (KL 0; see "Unsloth's UD-Q4_K_XL").
 - **The 64 GB mode** ran in a memory cgroup of 58 GiB on our 96 GB server (see "64 GB of RAM").
 - **UD-Q4_K_XL:** 10 GiB of RAM stayed available at the lowest in both runs. While the 512k profile loaded, 1.3 GiB went
   to the swap file (more than 20 GiB were available at the time) and swap use stayed there until the engine exited; the
@@ -190,16 +198,17 @@ block's scales apply. `setup.sh --model q4_k_xl` downloads it with ISTA-DASLab's
 
 - **96 GB of RAM** at least. The profiles use the 64 GB mode's switches to fit at all: with every expert pinned (73 GiB),
   9 GiB of page cache were left for the 28.8 GB lookup table and a 36k read ran at 146 tok/s. With the table read
-  through the page cache and only the experts the cards may give up kept in RAM (`FNX_EXPERT_DYN_GIB=18`), RAM holds
-  70.5 GiB of experts and 10 GiB stayed available at the lowest in the benchmark runs. The first long read after a load
-  waits for the disk (795 tok/s at 38,862 tokens); later ones find more of the table in the page cache (about 930).
+  through the page cache and only the experts the cards may give up kept in RAM (`FNX_EXPERT_DYN_GIB=18.430`; 18 until
+  18 Nov and in the benchmark runs), RAM holds 70.5 GiB of experts and 10 GiB stayed available at the lowest in the
+  benchmark runs. The first long read after a load waits for the disk (795 tok/s at 38,862 tokens); later ones find more
+  of the table in the page cache (about 930).
 - **Q4_0 draft experts** (`FNX_MTP_EXPERTS=q4_0`, since 13 Nov 2026): the MTP draft layer's experts made from Qwen's BF16
   tensors with `scripts/mtp_q4.py` instead of Strata's 2-bit ones, in the same VRAM. The model checks every drafted token,
   so the answers stay the same token for token; more drafts are accepted, and fresh writing ran 10 % faster (our round
   `mtp3` at `FNX_ROUTE_PRIOR=0`: 46.99 -> 51.84 tok/s; edits, drafted mostly by prompt lookup, equal). With IQ3_S, whose
   distribution sits further from the BF16 model the draft now follows, the gain was about 1 %, so its profile keeps the
   2-bit file. `setup.sh` makes the file. The benchmark above ran with it; its twelve fresh prompts gained less than our
-  round's (50.3 tok/s on 13 Nov with the 2-bit file, 50.9 now: fewer rounds, but longer ones).
+  round's (50.3 tok/s on 13 Nov with the 2-bit file, 50.9 on 16 Nov: fewer rounds, but longer ones).
 - **Prompt-path jobs of 96 rows and kernel mode 6** (`build.sh`'s default, `FNX_PF_JOBV=6`; since 16 Nov 2026). The
   P100 job kernels work on two tiles of 48 rows, so a 96-row job fills them and a 64-row one leaves a third empty. A 36k
   read in our test chain, the lookup table in the page cache (round `n16p1`, `FNX_ROUTE_PRIOR=0`): 736.0 tok/s with 64
@@ -210,10 +219,59 @@ block's scales apply. `setup.sh --model q4_k_xl` downloads it with ISTA-DASLab's
   512k profile): a cold read 761 and medium reads 545 / 699 / 749 / 702 / 841 / 745 / 808, between 13 Nov's and the
   96-row build's, the same logits in 29 of 29 requests. The other two models gain less from 96 rows (17 Nov, the same
   36k read): IQ3_S 5.3 % and keeps mode 7 (see "Our rounds"), Edge0-145B 3.2 % with mode 6 (see "Edge0-145B").
-- **What the RAM copies are for.** Of the 72.5 GiB of experts 52.5 GiB live only in RAM; the cards hold the rest. Those
-  keep a RAM copy when the prompt path (its staging buffers) or the K/V pool (at 524,288, up to 7.6 GiB a card) may
-  borrow their slots, and when they are dynamic: the cards' expert cache then follows the work. With 5.2 GiB fixed on the
-  cards by a general route profile instead (`FNX_EXPERT_DYN_GIB=14`, 4 GiB less RAM, 256k only) edits ran 12-14 % slower.
+- **The draft layer's source normalised per stream** (`FNX_MTP_NORM_STREAMS=1`, a new switch, off unless set; since
+  18 Nov 2026). The RMS norm of the MTP draft layer's source (`pre_fc_norm_hidden`, 4 x 2560 weights) takes each of a
+  row's four hyper-connection streams on its own, as the hyper-connection norms do, instead of the four as one vector
+  of 10,240 values; the tensors do not say which it is. Only the drafts change, and the model checks every drafted
+  token, so the answers stay the same. Alone, against our production engine of then (`6ccc87af`; round `n17v1` on
+  17 Nov, three loads of each, the 512k profile): fresh writing 50.82 → 52.79 tok/s (+3.9 %; 71.9 → 74.3 % of the
+  drafted tokens accepted, 2.46 → 2.64 tokens a round), writing after a 36k read 44.67 → 47.97 (+7.4 %), edits 61.82 →
+  60.50 (py, −2.1 %) and 63.81 → 63.32 (md, −0.8 %); the same first tokens in 77 of 77 requests (KL 0). A round takes
+  longer with it (the cards' time in fresh writing 41.0 → 42.7 ms) and gives more tokens; edits, drafted mostly by
+  prompt lookup, get no more of them (95.8 and 95.5 % accepted). Unset or 0, the engine makes the same call as before.
+  With IQ3_S and Edge0-145B it was not measured, and their profiles leave it unset. The idea is from the Colibri
+  engine's notes (see "Credits and license").
+- **Fewer K/V pages of the pool's own, more expert slots** (`FNX_EXPERT_RAM_GIB=52.071` and `FNX_EXPERT_DYN_GIB=18.430`,
+  before 52.5 and 18; settings only, since 18 Nov 2026). The K/V pool keeps 153 pages of its own (29,376 positions)
+  instead of 305 (58,560), and the VRAM that frees is 150 expert slots more a card: 5,495 slots of 1.46 MiB (7.9 GiB;
+  before 5,345 and 7.6), which the prompt path's buffers borrow while it reads and the pool as the context grows, up to
+  2,976 pages (571,392 positions). 17,885 experts instead of 18,035 are in RAM only; RAM still holds 70.5 GiB of
+  experts. Alone, on top of the switch above (round `n17k1`, two loads of each): the cards' time for a round of fresh
+  writing 42.42 / 42.44 → 41.73 / 41.91 ms (−1.4 %), for a token of an edit 15.77 / 15.72 → 15.46 / 15.51 ms (−1.7 %),
+  the same first tokens in 39 of 39 requests (KL 0). 290 slots more (51.671 and 18.830) were faster still (−2.1 % and
+  −3.6 %), but at load they left a card only 15-17 MiB above the least the load needs; 150 leave about 220 MiB. A card
+  with less to spare (another process on it, for example) stops the load with `FNX_EXPERT_DYN_GIB: VRAM short by …`.
+  The price: the pool borrows expert slots from 29.4k positions on, before from 58.5k, and while it does, a conversation
+  left idle for 2 minutes is parked to RAM and restored at its next turn (`IDLE_PARK` in `engine/tools/sfnx.cpp`).
+- **Both together, against our production before them** (`6ccc87af` with 52.5 and 18; rounds `n18s1`, `n18g1` and
+  `n18r1` in the night to 18 Nov, the 512k profile, the same prompts, old and new in the same test window). Fresh
+  writing 51.75 → 53.45 tok/s (+3.3 %); edits 61.6-61.9 → 61.7-61.9 (py) and 63.7-64.0 → 64.4-65.1 (md, +1.6 %); writing
+  after a 36k read 43.1 → 45.9. Deep reads and the writing after them (`n18g1`): 36k tokens 796.5 / 45.7 → 807.1 / 47.5
+  tok/s, 134k 856.8 / 44.4 → 880.3 / 47.7, 284k 801.2 / 41.8 → 826.9 / 42.4, 501k 751.2 / 33.7 → 762.7 / 35.1.
+  **Writing at a depth of 58.5k is slower:** 49.2 → 47.1 and 51.8 → 50.9 tok/s (two code tasks, −4.3 % and −1.7 %).
+  Which change that is we did not measure: the switch alone made edits 0.8-2.1 % slower, and the pool now borrows
+  expert slots from 29.4k positions on (before from 58.5k), though writing after the reads of 36k to 501k tokens above,
+  all past 29.4k, was faster. Reading is equal once the lookup table's rows are in the page cache (`n18r1`, loads old,
+  new, old, new: a 20,787-token prompt read at 938 / 810 / 939 / 940 tok/s the first time and at 939 / 942 / 940 / 940
+  the second). A first read 10-20 % slower after a load is a cold page cache for the 28.8 GB lookup table's rows, not a
+  setting. The same first tokens in 81 of 81, 17 of 17 and 7 of 7 requests (KL 0), the same texts at temperature 0 in
+  6 of 6, no errors. The 256k profile has the same three values, as our production does; the rounds ran on the 512k
+  one. These are our rounds, not `bench/bench.py`: its numbers in "Our numbers" are of 16 Nov.
+- **To get them** on a machine with the previous release: stop the server (never build beside a loaded engine), update
+  this folder (`git pull`) and run `bash build.sh` again: the switch is new engine code, and an engine built from earlier
+  sources ignores `FNX_MTP_NORM_STREAMS` without a word. `setup.sh` keeps an existing `DATA/profile.json`, so in each
+  UD-Q4_K_XL run config set `"FNX_EXPERT_RAM_GIB": "52.071"` and `"FNX_EXPERT_DYN_GIB": "18.430"` and add
+  `"FNX_MTP_NORM_STREAMS": "1"` to its `env`, or delete the file and run `setup.sh` again with the options you gave it
+  before. At the next load the engine's log has `sfnx: the draft layer's source normalised per stream` and, on ours,
+  `the K/V pool's own 153 pages (29376 positions)` (the count follows the VRAM free on your cards). The IQ3_S and
+  Edge0-145B profiles have not changed.
+- **To go back,** in the written JSON: `FNX_EXPERT_RAM_GIB=52.5` and `FNX_EXPERT_DYN_GIB=18` undo the second;
+  `FNX_MTP_NORM_STREAMS=0`, or the line removed, undoes the first.
+- **What the RAM copies are for.** Of the 71.7 GiB of experts 52.1 GiB live only in RAM; the cards hold the rest. Those
+  keep a RAM copy when the prompt path (its staging buffers) or the K/V pool (as the context grows past its own pages)
+  may borrow their slots, and when they are dynamic: the cards' expert cache then follows the work. With 5.2 GiB fixed on
+  the cards by a general route profile instead (`FNX_EXPERT_DYN_GIB=14` beside `FNX_EXPERT_RAM_GIB=52.5`, 4 GiB less RAM,
+  256k only) edits ran 12-14 % slower.
 - **Next-layer copies of 2 guessed experts a row** (`FNX_PREFETCH_WANT=2`, IQ3_S 6): every guessed copy competes with a
   window's own missing experts for PCIe. In our rounds at 512k (`q4k5`, `q4k7`) edits went from 67.4-70.3 tok/s at 6 a
   row to 77.4-84.3 at 2 (9 a row: 54-57; none: 72.2-78.1); fresh writing stayed at 55.8-57.5.
@@ -225,8 +283,9 @@ block's scales apply. `setup.sh --model q4_k_xl` downloads it with ISTA-DASLab's
   drafts (`--lookup` 5, 7, 10), NUMA placement of the RAM copies and half-size staging buffers did not help. Those
   reads were on the 64-row build with mode 7; with 96 rows and mode 6 the chain's 36k read at `FNX_ROUTE_PRIOR=0` is 976
   tok/s, against IQ3_S's 1,005 with 96 rows (955 with 64).
-- **Deep contexts** (round `q4k4`, 512k): reads to 134k / 284k / 501k tokens ran at 809 / 765 / 737 tok/s and writing
-  there at 49.3 / 48.0 / 38.4 tok/s, close to IQ3_S's (835 / 800 / 725, writing about 53 / 50 / 37).
+- **Deep contexts** (round `q4k4` on 13 Nov, the 64-row build, 512k): reads to 134k / 284k / 501k tokens ran at 809 /
+  765 / 737 tok/s and writing there at 49.3 / 48.0 / 38.4 tok/s, close to IQ3_S's (835 / 800 / 725, writing about 53 /
+  50 / 37). This release's deep reads (round `n18g1`) are under "Both together" above.
 - **Pictures** work with the same projector; the encoder reads the vocabulary from the first part.
 - **The same bits as our production:** see "Our numbers". The kernels compute in FP16 like the IQ3_S ones, so against
   other engines the answers are close, not identical.
@@ -305,7 +364,7 @@ shard. The engine maps Edge0's files as they are (`FNX_LATENT`); nothing is conv
 [docs/SWITCHES.md](docs/SWITCHES.md#the-edge0-145b-profile) lists what differs.
 
 **Speed,** tok/s. The first column is `bench/bench.py` as in "Our numbers" (17 Nov 2026 in a test window, 07:16-07:25,
-a freshly loaded engine, the profile written by `profile/fill_profile.py`), on this folder's sources built with
+a freshly loaded engine, the profile written by `profile/fill_profile.py`), on this folder's sources of then built with
 prompt-path jobs of 96 rows (`e56c3f60`; see "Build"), our Edge0 production engine since that day. The others are our own
 test chain (see "Our rounds"), round `n17e2` of the same morning: that engine, and our production until then (`f6088fde`,
 64 rows, `FNX_PF_JOBV=7`). All at `FNX_ROUTE_PRIOR=0`:
@@ -436,8 +495,9 @@ Each compile job takes 1-2 GB of RAM. Do not build on the machine while the engi
 and a build beside it once hung our server.
 
 The rebuilt binary will not be byte-identical to ours, because the source path is compiled in (the default location of
-`engine/data/`). Its code is the same: [docs/PROVENANCE.md](docs/PROVENANCE.md) lists the SHA-256 of every source file of
-our binary, and the copies here match them.
+`engine/data/`). [docs/PROVENANCE.md](docs/PROVENANCE.md) lists the SHA-256 of every source file, and the copies here
+match them: our Edge0 production engine's sources (`e56c3f60`) with 18 Nov's switch in four files, which we compiled on
+17 Nov as `a7717235` but have not run in a round or in the benchmark (see "Known limitations").
 
 ## Prepare the model files (what setup.sh does)
 
@@ -570,7 +630,7 @@ after about 5 minutes; then the API is at `http://127.0.0.1:8080/v1`.
 The `env` block holds 38 `FNX_*` switches. The ones that matter most for speed: `FNX_EXPERT_RAM_GIB=29.0` (how much of
 the experts stays in RAM only), `FNX_P100_DMA=1` with `FNX_DMA_SPLIT=2` and `FNX_PREFETCH=1` (copying missing experts),
 `FNX_PF_JOBV=7`, `FNX_PF_STAGE_ALL=1`, `FNX_PF_SP=1` and `FNX_PF_F16ACC=1` (reading), `FNX_P100_ATTN_DEC=1` (attention
-while writing). The UD-Q4_K_XL profiles differ in nine of them ([docs/SWITCHES.md](docs/SWITCHES.md#the-ud-q4_k_xl-profiles)).
+while writing). The UD-Q4_K_XL profiles differ in ten of them ([docs/SWITCHES.md](docs/SWITCHES.md#the-ud-q4_k_xl-profiles)).
 To stay within the trained 262,144 positions, edit the written JSON: `--max-context 262144`, and remove `FNX_ROPE_SCALE`
 and `FNX_YARN_ORIG_CTX`.
 
@@ -585,18 +645,21 @@ python3 bench/bench.py --strata-dir "$STRATA" --tests fresh,edit,long,medium,ima
 ```
 
 It runs our tests (fresh writing, two edits, a long read, medium reads, optionally a picture), 10-12 minutes on our
-machine, and prints your numbers beside our run of the same benchmark on this release ("Our numbers"): IQ3_S's or
+machine, and prints your numbers beside our runs of the same benchmark ("Our numbers"): IQ3_S's or
 UD-Q4_K_XL's by the model the server reports, the 64 GB mode's with `--ours iq3_s_64gb`. Some prompts are in Slovenian,
 as in our runs. The texts are read from the Strata v0.2.9 checkout, so every run reads the same ones. Before you compare:
 
 - **Start the engine fresh and run the benchmark once.** The expert cache learns what it reads, so a second run on the same
   engine is faster.
 - Ours are one run each. Our rounds differed by up to 2 % between runs of the same build (long read 903-918), more right
-  after a change of settings. All of ours ran on the 96-row build (`build.sh`'s default), with the profiles as they are
-  now: IQ3_S's and Edge0-145B's on 17 Nov, UD-Q4_K_XL's on 16 Nov (`--ours q4_k_xl` is the 512k one, `q4_k_xl_256k` the
-  256k one; its long read was not cold). The IQ3_S picture's first answer (5.1 s) came in that morning's first run with
-  pictures on this file; in our rounds it takes 2.6-2.7 s. On a 64-row build (`PF_JOB=64`) long prompts read slower,
-  UD-Q4_K_XL's most (see "Unsloth's UD-Q4_K_XL").
+  after a change of settings. All of ours ran on the 96-row build (`build.sh`'s default): IQ3_S's and Edge0-145B's on
+  17 Nov with the profiles as they are now, UD-Q4_K_XL's on 16 Nov (`--ours q4_k_xl` is the 512k one, `q4_k_xl_256k` the
+  256k one; its long read was not cold). UD-Q4_K_XL's are from before 18 Nov's switch and settings, and the benchmark
+  has not been run with those: in our rounds fresh writing was 3.3 % faster with them, edits equal (py) or 1.6 % faster
+  (md), writing after a 36k read 3.9-6.5 % faster, reading equal once the lookup table is in the page cache, and writing
+  at a depth of 58.5k, which the benchmark does not test, 1.7-4.3 % slower (see "Unsloth's UD-Q4_K_XL"). The IQ3_S
+  picture's first answer (5.1 s) came in that morning's first run with pictures on this file; in our rounds it takes
+  2.6-2.7 s. On a 64-row build (`PF_JOB=64`) long prompts read slower, UD-Q4_K_XL's most (see "Unsloth's UD-Q4_K_XL").
 - Keep `FNX_PROF=0` and nothing else on the cards. Our cards ran at 1,328 MHz under load; the clock follows recent load,
   so short tests can differ by 4-5 %.
 
@@ -712,12 +775,19 @@ python3 tune/tune.py --data /data/flash-next --screen           # 2-3 hours, one
   applied to the ones `build.sh` built) were built in the build directory `c213636c` came from, not yet with `build.sh`. `setup.sh` and `run.sh` were run against stand-ins (a fake Strata
   checkout and tools, small model files), not yet against the real downloads.
 - **The 96-row build** (`build.sh`'s default since 17 Nov): on 16 Nov `PF_JOB=96 JOBS=12 bash build.sh` built this folder's
-  engine on our server in 17 minutes (llama.cpp from our Strata v0.2.9 build tree at the pinned commit). The file
+  engine of then on our server in 17 minutes (llama.cpp from our Strata v0.2.9 build tree at the pinned commit). The file
   (`a1e9ac07`) is not the same as `e56c3f60`, which came from another build directory, but on the 512k profile it gave
   `e56c3f60`'s first-token logits in 29 of 29 requests of the benchmark and its speeds (fresh 50.4, edits 62.7 / 64.0, a
   cold read 794, medium reads 536 / 721 / 770 / 721 / 876 / 780 / 840, the picture 3.1 s; 44.3). It was run with UD-Q4_K_XL
   only; IQ3_S's and Edge0-145B's numbers are `e56c3f60`'s. `build.sh` has not been run again since 96 became its default
   (the same option, now without `PF_JOB=96`).
+- **18 Nov's switch** (`FNX_MTP_NORM_STREAMS`): `build.sh` has not been run on these sources. The same files were
+  compiled on our server on 17 Nov with 96-row jobs (`a7717235`), not with this folder's `build.sh`, and that binary
+  has not run in a round or in the benchmark. What ran, and is our UD-Q4_K_XL production engine, is `f28228d1`: that
+  engine's sources of before (`6ccc87af`'s) with the same patch, 96 rows. Unset, the code makes the calls it made
+  before; we did not run this folder's binary against `e56c3f60` to check it. The switch was not measured with IQ3_S
+  or Edge0-145B, the benchmark has not been run with 18 Nov's UD-Q4_K_XL settings, and our rounds with them ran on the
+  512k profile only.
 
 ## Credits and license
 
@@ -730,7 +800,9 @@ python3 tune/tune.py --data /data/flash-next --screen           # 2-3 hours, one
   Edge0 Community Model License 1.0; its files are not included here).
 - Ideas taken from others: the 16-bit `dp4a` form (`fnx_dp4a_xmad` in `p100_compat.h`) from KaneQuah/Kmic-68's llama.cpp
   fork (commit `99eb48176d`); the copy-engine thread for missing experts (`FNX_P100_DMA`) from DeepInfer; the register
-  constraint in `fnx_dp4a_vmad` from Strata PR #4274; the expert pool floor from Strata 0.2.12 (commit `20885f7a`).
+  constraint in `fnx_dp4a_vmad` from Strata PR #4274; the expert pool floor from Strata 0.2.12 (commit `20885f7a`); the
+  draft layer's source normalised per stream (`FNX_MTP_NORM_STREAMS`) from the notes of the Colibri engine
+  (JustVugg/colibri, Apache-2.0: its `docs/qwen38.md`, `Q38_MTP_WIRING=b`), the idea only, none of its code.
 
 MIT, the same license as Strata: see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md). The licenses of sFNX and ggml, and of
 the Coder's expert list (Apache-2.0), are in [third_party/](third_party/).

@@ -2034,6 +2034,7 @@ void Engine::mtp_attach(const Mtp& mtp) {
         b.mtp_emb = dalloc<float>((size_t) MAXT * N);
         b.mtp_en = dalloc<float>((size_t) MAXT * N);
         b.mtp_e2 = dalloc<float>((size_t) MAXT * N);
+        if (c == 0 && env_flag("FNX_MTP_NORM_STREAMS")) std::fprintf(stderr, "sfnx: the draft layer's source normalised per stream\n");
         b.mtp_src = dalloc<float>((size_t) MAXT * D);
         b.mtp_hn = dalloc<float>((size_t) MAXT * D);
         b.mtp_h2 = dalloc<float>((size_t) MAXT * D);
@@ -2102,7 +2103,9 @@ void Engine::mtp_enqueue(int T) {
         rms_norm_rows(b.mtp_emb, mc.norm_emb, b.mtp_en, T, N, eps, b.st);
         quantize_q8_1(b.mtp_en, b.xq, N, T, b.st);
         dense(mc.fc_emb, b.xq, b.mtp_e2, b, T);
-        rms_norm_rows(b.mtp_src, mc.norm_hid, b.mtp_hn, T, D, eps, b.st);
+        static const bool norm_streams = env_flag("FNX_MTP_NORM_STREAMS");   // mtp_norm_patch.py: each stream on its own
+        if (norm_streams) rms_norm_streams(b.mtp_src, mc.norm_hid, b.mtp_hn, T, HC, N, eps, b.st);
+        else rms_norm_rows(b.mtp_src, mc.norm_hid, b.mtp_hn, T, D, eps, b.st);
         quantize_q8_1(b.mtp_hn, b.xq, N, HC * T, b.st);
         for (int r0 = 0; r0 < HC * T; r0 += MAXT)   // every stream of every row through fc_hidden
             q8s_gemv(mc.fc_hid.s, N, N, (const uint8_t*) b.xq + (size_t) r0 * q8_1_bytes(N), b.mtp_h2 + (size_t) r0 * N, N,
@@ -2146,7 +2149,9 @@ void Engine::mtp_enqueue_lanes(const std::vector<DraftReq>& reqs, int T) {
         rms_norm_rows(b.mtp_emb, mc.norm_emb, b.mtp_en, T, N, eps, b.st);
         quantize_q8_1(b.mtp_en, b.xq, N, T, b.st);
         dense(mc.fc_emb, b.xq, b.mtp_e2, b, T);
-        rms_norm_rows(b.mtp_src, mc.norm_hid, b.mtp_hn, T, D, eps, b.st);
+        static const bool norm_streams = env_flag("FNX_MTP_NORM_STREAMS");   // mtp_norm_patch.py: each stream on its own
+        if (norm_streams) rms_norm_streams(b.mtp_src, mc.norm_hid, b.mtp_hn, T, HC, N, eps, b.st);
+        else rms_norm_rows(b.mtp_src, mc.norm_hid, b.mtp_hn, T, D, eps, b.st);
         quantize_q8_1(b.mtp_hn, b.xq, N, HC * T, b.st);
         for (int r0 = 0; r0 < HC * T; r0 += MAXT)
             q8s_gemv(mc.fc_hid.s, N, N, (const uint8_t*) b.xq + (size_t) r0 * q8_1_bytes(N), b.mtp_h2 + (size_t) r0 * N, N, std::min(MAXT, HC * T - r0), b.st);

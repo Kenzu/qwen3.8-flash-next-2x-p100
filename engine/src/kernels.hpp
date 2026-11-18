@@ -404,6 +404,8 @@ void cvec_apply(float* R, const float* v, float s, bool add, int T, void* st);
 
 // y[r] = x[r] / sqrt(mean(x[r]^2) + eps) * w for rows of n
 void rms_norm_rows(const float* x, const float* w, float* y, int rows, int n, float eps, void* st);
+// rms_norm_rows with each of a row's hc streams of n normalised on its own (w of hc * n): FNX_MTP_NORM_STREAMS
+void rms_norm_streams(const float* x, const float* w, float* y, int rows, int hc, int n, float eps, void* st);
 // the draft layer's input: R[t][c] = h[t][c] + e[t] for each of the HC streams (h rows of D, e rows of N)
 void add_streams(const float* h, const float* e, float* R, int T, void* st);
 

@@ -1341,7 +1341,9 @@ void Engine::prefill_draft(int C, int set) {
         rms_norm_rows(p.ple_emb, mc.norm_emb, p.mixed, C, N, eps, s);   // mixed: free until the hc read below
         pf_dense(p, mc.fc_emb.s, N, N, p.mixed, C, p.bo_f, N, s);
         // the source: one RMS over the four streams, then fc_hidden per stream (HC * C rows of N)
-        rms_norm_rows(p.R, mc.norm_hid, p.xf, C, D, eps, s);
+        static const bool norm_streams = env_flag("FNX_MTP_NORM_STREAMS");   // mtp_norm_patch.py: as Engine::mtp_enqueue
+        if (norm_streams) rms_norm_streams(p.R, mc.norm_hid, p.xf, C, HC, N, eps, s);
+        else rms_norm_rows(p.R, mc.norm_hid, p.xf, C, D, eps, s);
         pf_dense(p, mc.fc_hid.s, N, N, p.xf, HC * C, p.up32, N, s);
         add_streams(p.up32, p.bo_f, p.R, C, s);
         pf_hc_read(p, p.R, nullptr, nullptr, L.hc_norm[0], L.hc_down[0], L.hc_up[0], nullptr, eps, p.mixed, nullptr, C, s);
