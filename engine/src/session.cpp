@@ -419,16 +419,17 @@ CacheStats Session::cache_stats() const {
     return s;
 }
 
-// lookup_drafts with this session's LK, after the draft layer's d1
-std::vector<int> Session::lookup(const std::vector<int>& ctx, int d1, int* match) const { return lookup_drafts(ctx, LK_, d1, match); }
-
 // A window's cost grows with its rows (Q4: 8 rows ~20 ms, 16 ~34): in a run being copied (a code edit) the match is long
 // and the drafts are kept, a short match (new code) is mostly a coincidence
-std::vector<int> lookup_drafts(const std::vector<int>& ctx, int lk, int d1, int* match) {
+static std::vector<int> lookup_with_history(const std::vector<int>& ctx, int lk, int d1, int* match, LookupIndex8* index8) {
     static const int sources = static_cast<int>(std::clamp(env_int("FNX_LOOKUP_SOURCES", 1), 1LL, 4LL));
     static const auto extend_min = env_int("FNX_LOOKUP_EXTEND_MIN", 0);
     if (extend_min < 0 || extend_min > MAXT) throw std::runtime_error("FNX_LOOKUP_EXTEND_MIN outside 0..MAXT");
-    return select_lookup_drafts(ctx, lk, d1, sources, Engine::IMAGE_TOK, match, static_cast<int>(extend_min));
+    return select_lookup_drafts(ctx, lk, d1, sources, Engine::IMAGE_TOK, match, static_cast<int>(extend_min), index8);
+}
+
+std::vector<int> lookup_drafts(const std::vector<int>& ctx, int lk, int d1, int* match) {
+    return lookup_with_history(ctx, lk, d1, match, nullptr);
 }
 
 Finish Session::generate(int max_new, const Sampling& s, const std::function<void(int)>& emit, const std::atomic<bool>* stop,
@@ -484,6 +485,8 @@ Finish Session::generate(int max_new, const Sampling& s, const std::function<voi
     const auto t0 = std::chrono::steady_clock::now();
     timing_ = &st;
     std::vector<int> ctx(prompt_);   // every token so far, the next window's first row last
+    LookupIndex8 long_lookup;
+    const bool use_index8 = env_int("FNX_LOOKUP_INDEX8", 0) != 0;
     int x = prompt_.back();
     std::vector<int> drafts;
     std::vector<Dist> qs;   // per draft, the distribution it was drawn from; empty: a fixed draft (lookup, argmax)
@@ -639,7 +642,7 @@ Finish Session::generate(int max_new, const Sampling& s, const std::function<voi
             continue;
         }
         int match = -1;
-        drafts = lookup(ctx, d1, &match);
+        drafts = lookup_with_history(ctx, LK_, d1, &match, use_index8 ? &long_lookup : nullptr);
         qs.assign(drafts.size(), Dist{});
         if (!drafts.empty()) {   // the tokens after d1 follow from it and the context: fixed
             ++st.lookup_rounds;
