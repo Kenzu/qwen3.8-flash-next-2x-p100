@@ -10,6 +10,9 @@
 #include "p100_over.hpp"
 #include "pf_common.cuh"
 #include "engine.hpp"
+#if FNX_P100_NCCL
+#include "p100_nccl.hpp"
+#endif
 #include "engine_impl.hpp"
 #include "env.hpp"
 #include "pf_ring_plan.hpp"
@@ -442,6 +445,9 @@ struct Engine::Pf {
     PfRing ring_ce;                   // the chunk sums on the copy engines
     // FNX_PF_RCCL=1 (AMD): the chunk sums through RCCL in place on ring_ce.dag[set] (rc_api: RcclApi*, rc_comm: this card's communicator). RCCL launches a group's collectives
     // at ncclGroupEnd, so what must follow a sum on its stream (the f32 conversion, the `done` event) waits in post until the prompt loop's per-card pass is closed
+#if FNX_P100_NCCL
+    P100Nccl* nccl = nullptr;
+#endif
     bool rccl = false;
     bool rc_f32 = false;              // FNX_PF_RCCL_F32=1: the sums in f32
     const void* rc_api = nullptr;
@@ -739,6 +745,49 @@ __global__ void k_pfr_addend(float* __restrict__ x, const float* __restrict__ pa
 void pf_ring(Engine::Pf& p, int g, float* x, int C, const RingMoe* m, unsigned* err, cudaStream_t s, bool rs_only = false) {
     const unsigned seq = ++p.seq;
     if (m) k_pfr_addend<<<grid_for((size_t) C * N), 256, 0, s>>>(x, m->part, m->topw, m->logits, C, m->lat);
+#if FNX_P100_NCCL
+    if (p.nccl) {
+        const size_t count = (size_t)C * N;
+        const size_t split = (size_t)(C / 2) * N;
+        const size_t send_at = g == 0 ? 0 : split, recv_at = g == 0 ? split : 0;
+        const size_t send_n = g == 0 ? split : count - split, recv_n = count - send_n;
+        if (!p.nccl->prefill_group) {
+            nccl_check(ncclGroupStart(), "NCCL prefill group");
+            p.nccl->prefill_group = true;
+        }
+        if (rs_only) {
+            // The row-split schedule needs only the locally owned sum; exchange the other half in fp16.
+            __half* send = p.ring_ce.send;
+            __half* in = p.ring_ce.din[0][seq & 1u];
+            __half* sum = p.ring_ce.dag[seq & 1u];
+            if (send_n) {
+                k_pfr_pack<<<grid_for(send_n/2),256,0,s>>>((const float2*)(x+send_at),send_n/2,(__half2*)send,err);
+                nccl_check(ncclSend(send,send_n,ncclHalf,1-g,p.nccl->comm[g],s), "NCCL prompt row send");
+            }
+            if (recv_n) {
+                nccl_check(ncclRecv(in,recv_n,ncclHalf,1-g,p.nccl->comm[g],s), "NCCL prompt row receive");
+                p.post.push_back([=] {
+                    k_pfr_add<<<grid_for(recv_n/2),256,0,s>>>((const __half2*)in,(const float2*)(x+recv_at),recv_n/2,(__half2*)sum,err);
+                    k_pfr_out_chk<<<grid_for(recv_n/2),256,0,s>>>((const __half2*)sum,(float2*)(x+recv_at),recv_n/2,err);
+                    ckc(cudaGetLastError(), "NCCL prompt row output");
+                });
+            }
+            if (!p.nccl->scatter_logged) {
+                std::fprintf(stderr,"fnx: NCCL prefill row-split exchange enqueued (%d rows)\n",C);
+                p.nccl->scatter_logged = true;
+            }
+        } else {
+            nccl_round_half(x + send_at, send_n, err, s);
+            nccl_check(ncclAllReduce(x,x,count,ncclFloat,ncclSum,p.nccl->comm[g],s), "NCCL prompt all-reduce");
+            p.post.push_back([=] { nccl_round_half(x,count,err,s); });
+            if (!p.nccl->prefill_logged) {
+                std::fprintf(stderr,"fnx: NCCL prefill all-reduce enqueued (%d rows)\n",C);
+                p.nccl->prefill_logged = true;
+            }
+        }
+        return;
+    }
+#endif
 #if FNX_HIP
     if (p.rccl) {
         const RcclApi& api = *(const RcclApi*) p.rc_api;
@@ -1100,6 +1149,9 @@ void Engine::prefill_alloc() {
             r.flags = hpalloc<unsigned>(2 * PF_RING_STEPS);
         }
         p->dev = b.dev;
+#if FNX_P100_NCCL
+        p->nccl = nccl_ && nccl_->prefill ? nccl_.get() : nullptr;
+#endif
 #if FNX_HIP
         if (rccl_on_) {
             p->rccl = true;
@@ -1502,6 +1554,17 @@ void Engine::prefill_pass(const std::vector<PfChunk>& chunks, bool staging, cons
             ckc(cudaSetDevice(cb_[c]->dev), "set");
             f(c, *cb_[c], m_.cards[c], *pf_[c]);
         }
+#if FNX_P100_NCCL
+        if (nccl_ && nccl_->prefill_group) {
+            nccl_check(ncclGroupEnd(), "NCCL prefill launch");
+            nccl_->prefill_group = false;
+            for (int c=0; c<NCARD; ++c) {
+                ckc(cudaSetDevice(cb_[c]->dev), "NCCL prompt output device");
+                for (auto& fn : pf_[c]->post) fn();
+                pf_[c]->post.clear();
+            }
+        }
+#endif
 #if FNX_HIP
         if (rc) {   // the group's collectives launch now; what follows each sum on its stream is enqueued after them
             const int r = rc->GroupEnd();
@@ -1598,7 +1661,12 @@ void Engine::prefill_pass(const std::vector<PfChunk>& chunks, bool staging, cons
         ckc(cudaEventRecord(p.ev_go[j], b.st), "ring go");
         ckc(cudaStreamWaitEvent(p.ring_st, p.ev_go[j], 0), "ring go");
         pf_ring(p, c, x, rows, nullptr, b.ring.err, p.ring_st, ring_rs);
-        if (p.rccl) p.post.push_back([&p, done] { ckc(cudaEventRecord(done, p.ring_st), "ring done"); });   // after the sum's conversion, once the group is closed
+        const bool deferred = p.rccl
+#if FNX_P100_NCCL
+            || p.nccl
+#endif
+            ;
+        if (deferred) p.post.push_back([&p, done] { ckc(cudaEventRecord(done, p.ring_st), "ring done"); });   // after the sum's conversion, once the group is closed
         else ckc(cudaEventRecord(done, p.ring_st), "ring done");
     };
     // with the overlap an attention chunk's merge (then wo and its sum) waits until the next chunk's hc read is issued,

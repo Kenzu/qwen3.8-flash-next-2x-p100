@@ -64,7 +64,7 @@ say "llama.cpp headers at $LLAMA_COMMIT; engine/src/iq3s_x.cuh matches them"
 cmake -S "$HERE" -B "$B" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CUDA_COMPILER="$NVCC" -DCMAKE_CUDA_HOST_COMPILER="$HOSTCXX" -DCMAKE_CXX_COMPILER="$HOSTCXX" \
   -DCMAKE_CUDA_ARCHITECTURES=60 -DSTRATA_SPLIT_ARCH=60 -DSTRATA_SPLIT_CARDS="$CARDS" -DSTRATA_SPLIT_PF_JOB="$PF_JOB" \
-  -DSTRATA_GGML_DIR="$GG" ${CUDA:+-DCUDAToolkit_ROOT="$CUDA"}
+  -DSTRATA_P100_NCCL="${P100_NCCL:-OFF}" -DSTRATA_GGML_DIR="$GG" ${CUDA:+-DCUDAToolkit_ROOT="$CUDA"}
 say "building with $JOBS jobs, prompt-path jobs of $PF_JOB rows (a full build took about 20 minutes on 2 x Xeon Bronze 3106; kernels_p2.cu alone about 17)"
 nice -n 10 cmake --build "$B" --target "strata-split-$CARDS" -j "$JOBS"
 

@@ -379,6 +379,10 @@ struct Ring {
     unsigned* flags = nullptr;
     unsigned* next_flags = nullptr;
 };
+#if FNX_P100_NCCL
+void nccl_window_input(const Ring& ring, float* x, int rows, const RingMoe& moe, void* stream);
+void nccl_round_half(float* x, size_t count, unsigned* err, void* stream);
+#endif
 size_t ring_flag_words();
 // the ring's buffers for a capacity of `rows` rows (fp32 words): words of in, of ag
 size_t ring_in_words(int rows);

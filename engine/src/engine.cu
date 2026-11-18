@@ -2,6 +2,9 @@
 // engines share is engine_common.cu's (engine_parts.hpp).
 #include <cstdlib>
 #include "engine.hpp"
+#if FNX_P100_NCCL
+#include "p100_nccl.hpp"
+#endif
 #include "engine_parts.hpp"
 #include "env.hpp"
 #include "peer_probe.hpp"
@@ -165,6 +168,43 @@ Engine::Engine(Model& m, int max_ctx, int lanes) : m_(m), max_ctx_(max_ctx) {
     // FNX_PEER (AMD only; hip/peer_policy.hpp has the rules: 0 host exchange, 1 try the peer push, unset the build's default): every directed pair is probed at start
     // (kernel stores into the peer, a full read-back compare on both sides, a flag round trip); any failure leaves the host exchange for the whole run with one line.
     // FNX_PEER_PARTS: 1 the window sums, 2 the attention merge, 3 both (the default)
+#if FNX_P100_NCCL
+    const std::string mode = std::getenv("FNX_NCCL") ? std::getenv("FNX_NCCL") : "off";
+    if (mode != "off") {
+        if (mode != "decode" && mode != "prefill" && mode != "both")
+            throw std::runtime_error("FNX_NCCL expects off, decode, prefill or both");
+        nccl_ = std::make_shared<P100Nccl>();
+        nccl_->decode = mode != "prefill";
+        nccl_->prefill = mode != "decode";
+        if ((nccl_->decode && (ring_f32() || env_int("FNX_ONEHOP",1) == 2)) ||
+            (nccl_->prefill && env_flag("FNX_PF_RING_SM")))
+            throw std::runtime_error("NCCL experiment requires the standard two-card fp16 ring");
+        int devices[2] = {m.cards[0].dev, m.cards[1].dev}, version = 0;
+        nccl_check(ncclGetVersion(&version), "NCCL version");
+        nccl_check(ncclCommInitAll(nccl_->comm, 2, devices), "NCCL communicators");
+        // First launch outside graph capture; also verify the result on both devices.
+        float *probe[2]{};
+        for (int c=0; c<2; ++c) {
+            ck(cudaSetDevice(devices[c]), "NCCL test device");
+            probe[c] = dalloc<float>(1);
+            float v = (float)(c + 1);
+            ck(cudaMemcpy(probe[c], &v, sizeof v, cudaMemcpyHostToDevice), "NCCL test input");
+        }
+        nccl_check(ncclGroupStart(), "NCCL test group");
+        for (int c=0; c<2; ++c) {
+            ck(cudaSetDevice(devices[c]), "NCCL test device");
+            nccl_check(ncclAllReduce(probe[c],probe[c],1,ncclFloat,ncclSum,nccl_->comm[c],nullptr), "NCCL test sum");
+        }
+        nccl_check(ncclGroupEnd(), "NCCL test launch");
+        for (int c=0; c<2; ++c) {
+            ck(cudaSetDevice(devices[c]), "NCCL test device");
+            float v = 0;
+            ck(cudaMemcpy(&v, probe[c], sizeof v, cudaMemcpyDeviceToHost), "NCCL test output");
+            if (v != 3.f) throw std::runtime_error("NCCL two-card sum self-test failed");
+        }
+        std::fprintf(stderr,"fnx: NCCL %d self-test passed; mode=%s, devices=%d,%d\n",version,mode.c_str(),devices[0],devices[1]);
+    }
+#endif
     bool peer_on = false;
     int peer_parts = 0;
 #if FNX_HIP
@@ -1753,7 +1793,35 @@ void Engine::ffn_half(int T, int call, CardBuf& b, const CardW& w, const LayerW&
     m.topw = b.topw;
     m.logits = b.logits;
     if (lat) m.lat = b.latu;   // edge0_patch.py
-    ring_sum(b.ring, b.bo_f, T, (const unsigned*) (ctl + 1), call, b.st, m);
+    window_sum(b, b.bo_f, T, (const unsigned*) (ctl + 1), call, m);
+}
+
+void Engine::window_sum(CardBuf& b, float* x, int rows, const unsigned* tag, int call, const RingMoe& moe) {
+#if FNX_P100_NCCL
+    if (nccl_ && nccl_->decode) {
+        nccl_window_input(b.ring, x, rows, moe, b.st);
+        // All window paths visit the two cards in order; the sum is the last operation in each half.
+        if (b.ring.card == 0) return;
+        CardBuf& first = *cb_[0];
+        float* buffers[2] = {x == b.bo_a ? first.bo_a : first.bo_f, x};
+        const size_t count = (size_t)rows * N;
+        nccl_check(ncclGroupStart(), "NCCL window group");
+        for (int c=0; c<2; ++c) {
+            nccl_check(ncclAllReduce(buffers[c],buffers[c],count,ncclFloat,ncclSum,nccl_->comm[c],cb_[c]->st), "NCCL window sum");
+        }
+        nccl_check(ncclGroupEnd(), "NCCL window launch");
+        for (int c=0; c<2; ++c) {
+            ck(cudaSetDevice(cb_[c]->dev), "NCCL window output device");
+            nccl_round_half(buffers[c], count, cb_[c]->ring.err, cb_[c]->st);
+        }
+        if (!nccl_->decode_logged) {
+            std::fprintf(stderr,"fnx: NCCL window all-reduce enqueued (%zu floats per rank)\n",count);
+            nccl_->decode_logged = true;
+        }
+        return;
+    }
+#endif
+    ring_sum(b.ring, x, rows, tag, call, b.st, moe);
 }
 
 // every card's work for one window of T rows, in stream order (captured into a graph unless dumping)
@@ -1822,7 +1890,7 @@ void Engine::enqueue(int T, bool dumps) {
                 attention(T, b, w, L, b.kc[l], b.vc[l], b.ctl, b.qsa_ring[l], b.qsa_pooled[l], 128 + l);
             }
             prof_mark(b, PK_SUM);
-            ring_sum(b.ring, b.bo_a, T, (const unsigned*) (b.ctl + 1), call, b.st);
+            window_sum(b, b.bo_a, T, (const unsigned*) (b.ctl + 1), call);
         });
         ++call;
         dd("hc_mixed", l, cb_[0]->mixed, N);
@@ -1916,7 +1984,7 @@ void Engine::enqueue_batch(const std::vector<int>& lanes) {
                 quantize_q8_1(b.att, b.xq, w.nq * HD, T, b.st);
                 dense(L.wo, b.xq, b.bo_a, b, T);
             }
-            ring_sum(b.ring, b.bo_a, T, (const unsigned*) (b.ctl + 1), call, b.st);
+            window_sum(b, b.bo_a, T, (const unsigned*) (b.ctl + 1), call);
         });
         ++call;
         each([&](int, CardBuf& b, const CardW& w) { ffn_half(T, call, b, w, w.L[l], b.R, b.ctl); });
@@ -2006,7 +2074,7 @@ void Engine::enqueue_rows(const std::vector<int>& lanes, const std::vector<int>&
                 quantize_q8_1(b.att, b.xq, w.nq * HD, T, b.st);
                 dense(L.wo, b.xq, b.bo_a, b, T);
             }
-            ring_sum(b.ring, b.bo_a, T, (const unsigned*) (b.ctl + 1), call, b.st);
+            window_sum(b, b.bo_a, T, (const unsigned*) (b.ctl + 1), call);
         });
         ++call;
         each([&](int, CardBuf& b, const CardW& w) { ffn_half(T, call, b, w, w.L[l], b.R, b.ctl); });
@@ -2114,7 +2182,7 @@ void Engine::mtp_enqueue(int T) {
         hc_read(b.mtp_R, nullptr, nullptr, L.hc_norm[0], L.hc_down[0], L.hc_up[0], L.hc_inj[0], eps, b.mixed, b.inj_a, b.hcs, b.ring.err, T,
                 b.st, b.xq);
         attention(T, b, w, L, b.mtp_kc, b.mtp_vc, b.mtp_ctl, b.mtp_qsa_ring, b.mtp_qsa_pooled, 128);
-        ring_sum(b.ring, b.bo_a, T, (const unsigned*) (b.mtp_ctl + 1), 0, b.st);
+        window_sum(b, b.bo_a, T, (const unsigned*) (b.mtp_ctl + 1), 0);
     }
     for (int c = 0; c < NCARD; ++c) {
         CardBuf& b = *cb_[c];
@@ -2180,7 +2248,7 @@ void Engine::mtp_enqueue_lanes(const std::vector<DraftReq>& reqs, int T) {
         attn_finish(b.qg, b.att, b.att_ring, (const unsigned*) (b.mtp_ctl + 1), 128, T, b.att_part, b.st);
         quantize_q8_1(b.att, b.xq, w.nq * HD, T, b.st);
         dense(L.wo, b.xq, b.bo_a, b, T);
-        ring_sum(b.ring, b.bo_a, T, (const unsigned*) (b.mtp_ctl + 1), 0, b.st);
+        window_sum(b, b.bo_a, T, (const unsigned*) (b.mtp_ctl + 1), 0);
     }
     for (int c = 0; c < NCARD; ++c) {
         CardBuf& b = *cb_[c];

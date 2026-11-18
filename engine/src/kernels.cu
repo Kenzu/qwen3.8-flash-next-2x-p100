@@ -1717,6 +1717,36 @@ __global__ void k_ring_big_out(Ring r, float* x, int T, const unsigned* tagp, in
 size_t ring_in_words(int rows) { return (size_t) 2 * RSTEPS * rows * RCH * 2; }
 size_t ring_ag_words(int rows) { return (size_t) 2 * rows * N * 2; }
 
+#if FNX_P100_NCCL
+// The host ring rounds only the sender of each half before the sum, then rounds the result.
+__global__ void k_nccl_window_input(float* x, int rows, RingMoe moe, int rank, unsigned* err) {
+    for (int e = blockIdx.x * blockDim.x + threadIdx.x; e < rows * N; e += gridDim.x * blockDim.x) {
+        const int col = e % N;
+        float v = ring_x(x, moe, rows, e / N, col);
+        if ((col >= N / 2) == rank) {
+            if (!(fabsf(v) <= RING_MAX)) atomicOr(err, 2u);
+            v = __half2float(__float2half_rn(v));
+        }
+        x[e] = v;
+    }
+}
+__global__ void k_nccl_round_half(float* x, size_t count, unsigned* err) {
+    for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x; i < count; i += (size_t)gridDim.x * blockDim.x) {
+        float v = x[i];
+        if (!(fabsf(v) <= RING_MAX)) atomicOr(err, 2u);
+        x[i] = __half2float(__float2half_rn(v));
+    }
+}
+void nccl_window_input(const Ring& ring, float* x, int rows, const RingMoe& moe, void* stream) {
+    k_nccl_window_input<<<(rows * N + 255) / 256, 256, 0, (cudaStream_t)stream>>>(x, rows, moe, ring.card, ring.err);
+    ck_launch("NCCL window input");
+}
+void nccl_round_half(float* x, size_t count, unsigned* err, void* stream) {
+    if (!count) return;
+    k_nccl_round_half<<<(count + 255) / 256, 256, 0, (cudaStream_t)stream>>>(x, count, err);
+    ck_launch("NCCL fp16 round");
+}
+#endif
 void ring_sum(const Ring& r, float* x, int T, const unsigned* tag, int call, void* st, const RingMoe& m) {
     ring_call_check(call, "ring_sum");
     if (T > r.rows) throw std::runtime_error("ring_sum: more rows than the ring's buffers hold");
