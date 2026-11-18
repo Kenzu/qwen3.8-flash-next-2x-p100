@@ -1,5 +1,6 @@
 #include "session.hpp"
 #include "env.hpp"
+#include "lookup_suffix.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,8 +15,6 @@
 namespace fnx {
 
 namespace {
-constexpr int LOOKUP_N = 3;   // n-gram length of the lookup drafts
-constexpr int LOOKUP_MIN = 3;   // the fewest lookup drafts a round offers (Session::lookup)
 constexpr size_t PARK_MIN = 1024;   // a conversation shorter than this is read again rather than parked
 constexpr size_t ROOT_MIN = 1024;   // a first message (system prompt and tools) this long is parked on its own
 // ... when it is a system or developer message (the role token after <|im_start|>): what other conversations share. A
@@ -426,24 +425,8 @@ std::vector<int> Session::lookup(const std::vector<int>& ctx, int d1, int* match
 // A window's cost grows with its rows (Q4: 8 rows ~20 ms, 16 ~34): in a run being copied (a code edit) the match is long
 // and the drafts are kept, a short match (new code) is mostly a coincidence
 std::vector<int> lookup_drafts(const std::vector<int>& ctx, int lk, int d1, int* match) {
-    std::vector<int> r;
-    if (match) *match = -1;
-    if (lk == 0 || (int) ctx.size() <= LOOKUP_N) return r;
-    const size_t n0 = ctx.size() - LOOKUP_N;
-    for (size_t s = n0; s-- > 0;)
-        if (std::equal(ctx.begin() + s, ctx.begin() + s + LOOKUP_N, ctx.begin() + n0)) {
-            if (s + LOOKUP_N < ctx.size() && (d1 < 0 || ctx[s + LOOKUP_N] == d1)) {
-                int m = LOOKUP_N;
-                while (m < lk && (size_t) (m - LOOKUP_N) < s && ctx[s - 1 - (m - LOOKUP_N)] == ctx[n0 - 1 - (m - LOOKUP_N)]) ++m;
-                const int k = std::min(lk, std::max(LOOKUP_MIN, m));
-                r.assign(ctx.begin() + s + LOOKUP_N, ctx.begin() + std::min(ctx.size(), s + LOOKUP_N + k));
-                if (match) *match = (int) s;
-            }
-            break;
-        }
-    // an image cell is never a draft (nor anything after it)
-    r.erase(std::find_if(r.begin(), r.end(), [](int t) { return t >= Engine::IMAGE_TOK; }), r.end());
-    return r;
+    static const int sources = static_cast<int>(std::clamp(env_int("FNX_LOOKUP_SOURCES", 1), 1LL, 4LL));
+    return select_lookup_drafts(ctx, lk, d1, sources, Engine::IMAGE_TOK, match);
 }
 
 Finish Session::generate(int max_new, const Sampling& s, const std::function<void(int)>& emit, const std::atomic<bool>* stop,
