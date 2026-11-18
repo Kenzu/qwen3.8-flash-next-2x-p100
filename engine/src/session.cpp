@@ -426,7 +426,9 @@ std::vector<int> Session::lookup(const std::vector<int>& ctx, int d1, int* match
 // and the drafts are kept, a short match (new code) is mostly a coincidence
 std::vector<int> lookup_drafts(const std::vector<int>& ctx, int lk, int d1, int* match) {
     static const int sources = static_cast<int>(std::clamp(env_int("FNX_LOOKUP_SOURCES", 1), 1LL, 4LL));
-    return select_lookup_drafts(ctx, lk, d1, sources, Engine::IMAGE_TOK, match);
+    static const auto extend_min = env_int("FNX_LOOKUP_EXTEND_MIN", 0);
+    if (extend_min < 0 || extend_min > MAXT) throw std::runtime_error("FNX_LOOKUP_EXTEND_MIN outside 0..MAXT");
+    return select_lookup_drafts(ctx, lk, d1, sources, Engine::IMAGE_TOK, match, static_cast<int>(extend_min));
 }
 
 Finish Session::generate(int max_new, const Sampling& s, const std::function<void(int)>& emit, const std::atomic<bool>* stop,

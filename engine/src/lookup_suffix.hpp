@@ -8,7 +8,7 @@ namespace fnx {
 constexpr int LOOKUP_N = 3;
 
 inline std::vector<int> select_lookup_drafts(const std::vector<int>& ctx, int limit, int first_draft,
-                                             int sources, int image_token, int* match) {
+                                             int sources, int image_token, int* match, int extend_min = 0) {
     if (match) *match = -1;
     if (limit <= 0 || ctx.size() <= LOOKUP_N) return {};
     const std::size_t suffix = ctx.size() - LOOKUP_N;
@@ -34,7 +34,9 @@ inline std::vector<int> select_lookup_drafts(const std::vector<int>& ctx, int li
     if (!best_length) return {};
     if (match) *match = static_cast<int>(best_start);
     const auto begin = ctx.begin() + best_start + LOOKUP_N;
-    const auto end = begin + std::min<std::ptrdiff_t>(ctx.end() - begin, std::min(limit, best_length));
+    const bool extend = extend_min > 0 && best_length >= extend_min;
+    const int proposal_length = extend ? limit : std::min(limit, best_length);
+    const auto end = begin + std::min<std::ptrdiff_t>(ctx.end() - begin, proposal_length);
     const auto first_image = std::find_if(begin, end, [image_token](int token) { return token >= image_token; });
     return {begin, first_image};
 }
