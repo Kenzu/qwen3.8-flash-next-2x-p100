@@ -2,16 +2,23 @@
 
 Compared with Strata v0.2.10 (`github.com/Niko1221/Strata`, commit `ffa80d73133ea5c548aefe57889a16e8085a938f`), directory `src/split/`.
 Strata's `src/split/` is itself a port of sFNX by John Fink (`third_party/sfnx/NOTICE.md`). The full diff is `upstream-v0.2.10.diff`.
-SHA-256 values are those of the sources of our Edge0 production engine (`strata-split-2`, binary SHA-256
-`f6088fdee182bbe6…`, 15 Nov 2026): our Coder engine (`40ef6d531143d73d…`: our UD-Q4_K_XL production engine of 13 Nov,
+SHA-256 values are those of the sources of our Edge0 production engine
+(`strata-split-2`, binary SHA-256 `f6088fdee182bbe6…`, 15 Nov 2026) with 18 Nov's patch applied (see the end of this
+paragraph). That engine's sources are our Coder engine (`40ef6d531143d73d…`: our UD-Q4_K_XL production engine of 13 Nov,
 `c213636ce3de2182…`, with `history/patches/maska_patch.py` applied) with the five `history/patches/edge0_patch*.py` applied.
 With `FNX_EXPERT_MASK` and `FNX_LATENT` unset it gives our production engines' bits (see README, "Our numbers", "Coder" and
 "Edge0-145B"). Since 16 Nov 2026 our UD-Q4_K_XL production engine is `6ccc87af7e9baf50…`: `c213636ce3de2182…`'s sources
-built with `-DSTRATA_SPLIT_PF_JOB=96` (no source file differs; README, "Build"). This folder's sources built with that
+built with `-DSTRATA_SPLIT_PF_JOB=96` (no source file differs; README, "Build"). This folder's sources of then built with that
 option (`e56c3f604d2eb5a7…`) gave its first-token logits in 29 of 29 requests of the benchmark, and `PF_JOB=96 bash build.sh`'s
 own build on our server (`a1e9ac07946cee2f…`) gave the same ones. Since 17 Nov 2026 `build.sh` builds with that option by
 default, `e56c3f604d2eb5a7…` is our Edge0 production engine, and our IQ3_S production engine is `36409ddc524cd93e…`:
 `bf9c7f1f22b0af4a…`'s sources built with that option (the same first-token logits in 27 of 27 requests of our test chain).
+Since 18 Nov 2026 `src/engine.cu`, `src/kernels.cu`, `src/kernels.hpp` and `src/prefill.cu` also have
+`history/patches/mtp_norm_patch.py` applied (`FNX_MTP_NORM_STREAMS`; unset, the code makes the calls it made before). The
+sources as they are here were built with that option on 17 Nov (`a77172354b195150…`): that engine is in none of our
+profiles and has not run in a round or in the benchmark, and `build.sh` has not been run on them. Our UD-Q4_K_XL
+production engine since 18 Nov is `f28228d145e981b5…`: `6ccc87af7e9baf50…`'s sources with the same patch, built with that
+option (README, "Unsloth's UD-Q4_K_XL" and "Known limitations").
 
 | File | Origin | SHA-256 |
 |---|---|---|
@@ -28,7 +35,7 @@ default, `e56c3f604d2eb5a7…` is our Edge0 production engine, and our IQ3_S pro
 | `src/card_check.hpp` | Strata v0.2.10, unchanged | `704aeda84671d56f6021321ee04562562ffa2358661b73312399184396558320` |
 | `src/card_split.hpp` | Strata v0.2.10, unchanged | `0e211d82a6b0560078e9b5a6e2e681394b412f5344c08b92f877dc9fc0b0e2cf` |
 | `src/dense.cuh` | Strata v0.2.10, modified by us | `1ca66d9ac98ea99c5f7dc388142cb04396440b2a8be38b2dd10e34ee4e2b62ba` |
-| `src/engine.cu` | Strata v0.2.10, modified by us | `039f22bd7644d82ed504a17a0401008dd9e18cae3572822b7d93fcd43ad99cee` |
+| `src/engine.cu` | Strata v0.2.10, modified by us | `631f270c9d83e7f6aa95036ec6264ebe7d075ff546073c656fcaafc3cd94c0ca` |
 | `src/engine.hpp` | Strata v0.2.10, modified by us | `7c42647a14be2e63f20f7c6a56ab051d1dacf2a7e7da7cf8cab8f2f9fd4fe5c4` |
 | `src/engine_common.cu` | Strata v0.2.10, modified by us | `7787e092a92f2330fd08ccca8b6302f6ad65e2472c93de9aa5dead9f625b8bd9` |
 | `src/engine_impl.hpp` | Strata v0.2.10, modified by us | `97a32711f217a6c06bc929d8fc3024f2aa0c52df61de6d03144942731e212fd1` |
@@ -48,8 +55,8 @@ default, `e56c3f604d2eb5a7…` is our Edge0 production engine, and our IQ3_S pro
 | `src/hip/rccl_dl.hpp` | Strata v0.2.10, unchanged | `e7d9ea5291dd907900f81c9521f64dad9d94770d023513f9b2ac6ef78b805167` |
 | `src/hip/selftest_policy.hpp` | Strata v0.2.10, unchanged | `3ba715a7916f8900e76fc9b9e5464cdea053b51be1d0c28a8d68206dd7482cf9` |
 | `src/iq3s_x.cuh` | ours (new) | `b3e208682ef2a76e78c9b6154e792dc1f39129f8fd7de381bac8a6fd6568146a` |
-| `src/kernels.cu` | Strata v0.2.10, modified by us | `e0427b54637fb411ffef2af8a17fb981d25cac635f87f9fab480ce00070533e7` |
-| `src/kernels.hpp` | Strata v0.2.10, modified by us | `73a590aa34408ff422efefe9874c7f9cba4aebc271da3718d16b607b44e6ce18` |
+| `src/kernels.cu` | Strata v0.2.10, modified by us | `002f4ac82df95970c3e05e821f5b4cad3effd599c021a85d8d1afed4ae2774c7` |
+| `src/kernels.hpp` | Strata v0.2.10, modified by us | `e9cbb275c2c9f28a431ce8aae4bd43ab7de2a4d2549bfbbb82639907692bbd8e` |
 | `src/model.cpp` | Strata v0.2.10, modified by us | `3fdb890d2a67771a5132ef46686dbec5e1323b17bb8a2372372cfba56f25a4b9` |
 | `src/model.hpp` | Strata v0.2.10, modified by us | `51830eb21547acbac1bb0d0279ec99f774092c82723b32ab2b46eb7ac3220c7a` |
 | `src/moe.cuh` | Strata v0.2.10, modified by us | `cfdffc68ff915639d7ef036d7e35bd67320c37e44511cc0964d10671f46598ac` |
@@ -69,7 +76,7 @@ default, `e56c3f604d2eb5a7…` is our Edge0 production engine, and our IQ3_S pro
 | `src/peer_probe.hpp` | Strata v0.2.10, unchanged | `e5bc045c8f97d25b4cfc5c3b3d0e7b1f7d0cc258a6756ea13ceb7283fe2a0554` |
 | `src/pf_common.cuh` | Strata v0.2.10, modified by us | `5515e525fd5036bfecf7facb806b1622a89df0a183a0d1dc58d4b0be5328c116` |
 | `src/pf_ring_plan.hpp` | Strata v0.2.10, unchanged | `ce52cb8fc7812a9ecd31742d0c3c35999a62e1c6d3cb8d2f7ba971806aff59aa` |
-| `src/prefill.cu` | Strata v0.2.10, modified by us | `624ea008533993a455c6c6ad7863890de7033a385fc3db73045e2f03820e41da` |
+| `src/prefill.cu` | Strata v0.2.10, modified by us | `8618c166f6c746b7eab2fabfe12f26140883cb226a75cbb13437a7544453be3b` |
 | `src/qsa.cuh` | Strata v0.2.10, modified by us | `7e94bdde945da43bb627c9bf7ed6fa8ff37a836741db8ebf1b5119dc6bba2d51` |
 | `src/rope.hpp` | Strata v0.2.10, unchanged | `91c54cfda3b34a0f4c515b35c11a57d2b76a6662e350b86a71dd73bd455568a1` |
 | `src/rope_gguf.hpp` | Strata v0.2.10, unchanged | `72ca61924332a6ef312f0a2ddf2fa6ace8368aee02e892fdb66333aebac19e56` |

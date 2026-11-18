@@ -22,4 +22,6 @@ the headers it needs). `setup.sh` downloads the model files from their own repos
 Ideas taken from others, with thanks: the 16-bit form of the byte dot product (`fnx_dp4a_xmad`) from KaneQuah/Kmic-68's
 llama.cpp fork (commit `99eb48176d`); a host thread per card that copies missing experts with the copy engine
 (`FNX_P100_DMA`) from DeepInfer; the inline-assembly register constraint in `fnx_dp4a_vmad` from Strata PR #4274; the
-expert pool floor from Strata 0.2.12 (commit `20885f7a`); `FNX_PF_TAIL_MIB=4096` for UD-Q4_K_XL from a tester's recipe for that file.
+expert pool floor from Strata 0.2.12 (commit `20885f7a`); `FNX_PF_TAIL_MIB=4096` for UD-Q4_K_XL from a tester's recipe for that file;
+the MTP draft layer's source normalised per stream (`FNX_MTP_NORM_STREAMS`) from the notes of the Colibri engine
+(JustVugg/colibri, Apache-2.0: its `docs/qwen38.md`, `Q38_MTP_WIRING=b`), the idea only, none of its code.

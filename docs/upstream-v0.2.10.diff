@@ -1,6 +1,6 @@
 diff -ruN -x data a/CMakeLists.txt b/CMakeLists.txt
---- a/CMakeLists.txt	2026-11-15 06:43:51.887688400 +0100
-+++ b/CMakeLists.txt	2026-11-15 06:43:52.369804000 +0100
+--- a/CMakeLists.txt	2026-11-18 11:03:25.492157700 +0100
++++ b/CMakeLists.txt	2026-11-18 11:03:26.994004500 +0100
 @@ -63,7 +63,7 @@
  
  set(_sp ${CMAKE_CURRENT_SOURCE_DIR})
@@ -12,7 +12,7 @@ diff -ruN -x data a/CMakeLists.txt b/CMakeLists.txt
    list(APPEND _sp_engine ${_sp}/src/selftest.cu)   # the kernel self-test of a card Strata has not run the split on (hip/selftest_policy.hpp)
 diff -ruN -x data a/p100_compat.h b/p100_compat.h
 --- a/p100_compat.h	1970-01-01 01:00:00.000000000 +0100
-+++ b/p100_compat.h	2026-11-15 06:43:52.373065600 +0100
++++ b/p100_compat.h	2026-11-18 11:03:27.011304900 +0100
 @@ -0,0 +1,66 @@
 +// p100_compat.h: what the split engine's kernels ask of a card and sm_60 does not have (force-included in every CUDA source).
 +#pragma once
@@ -81,8 +81,8 @@ diff -ruN -x data a/p100_compat.h b/p100_compat.h
 +__device__ __forceinline__ void fnx_nanosleep(unsigned) {}
 +#define __nanosleep fnx_nanosleep
 diff -ruN -x data a/src/attn_prompt.cuh b/src/attn_prompt.cuh
---- a/src/attn_prompt.cuh	2026-11-15 06:43:51.713640700 +0100
-+++ b/src/attn_prompt.cuh	2026-11-15 06:43:52.272310300 +0100
+--- a/src/attn_prompt.cuh	2026-11-18 11:03:26.030253300 +0100
++++ b/src/attn_prompt.cuh	2026-11-18 11:03:26.625483800 +0100
 @@ -18,6 +18,7 @@
  static_assert(AP_THREADS / 32 * 2 * 16 == HD, "eight warps of two 16-column O tiles");
  static_assert(AP_THREADS / 32 * APC <= AP_LDF && APC % 16 == 0, "the S partials of a tile side by side in st");
@@ -282,8 +282,8 @@ diff -ruN -x data a/src/attn_prompt.cuh b/src/attn_prompt.cuh
  __global__ void __launch_bounds__(HD) k_pf_attn_merge(const float* __restrict__ own, const float* __restrict__ recv,
                                                        const float* __restrict__ qg, float* __restrict__ out, int C, int card) {
 diff -ruN -x data a/src/batch.cpp b/src/batch.cpp
---- a/src/batch.cpp	2026-11-15 06:43:51.719621500 +0100
-+++ b/src/batch.cpp	2026-11-15 06:43:52.154037400 +0100
+--- a/src/batch.cpp	2026-11-18 11:03:25.772953900 +0100
++++ b/src/batch.cpp	2026-11-18 11:03:26.303241700 +0100
 @@ -139,16 +139,17 @@
      last_verify_ms = ms_since(tv);
      last_rows = T;
@@ -325,8 +325,8 @@ diff -ruN -x data a/src/batch.cpp b/src/batch.cpp
              double stand;
              if (L.s.temperature <= 0.f) {
 diff -ruN -x data a/src/dense.cuh b/src/dense.cuh
---- a/src/dense.cuh	2026-11-15 06:43:51.725814900 +0100
-+++ b/src/dense.cuh	2026-11-15 06:43:52.160777700 +0100
+--- a/src/dense.cuh	2026-11-18 11:03:26.090910500 +0100
++++ b/src/dense.cuh	2026-11-18 11:03:26.317744700 +0100
 @@ -5,6 +5,60 @@
  
  constexpr int Q8S_THREADS = 256, Q8S_SEGS = 3;
@@ -542,8 +542,8 @@ diff -ruN -x data a/src/dense.cuh b/src/dense.cuh
 +
  }  // namespace
 diff -ruN -x data a/src/engine.cu b/src/engine.cu
---- a/src/engine.cu	2026-11-15 06:43:51.727327700 +0100
-+++ b/src/engine.cu	2026-11-15 06:43:52.308611800 +0100
+--- a/src/engine.cu	2026-11-18 11:03:25.703708100 +0100
++++ b/src/engine.cu	2026-11-18 11:03:26.739720600 +0100
 @@ -5,8 +5,10 @@
  #include "engine_parts.hpp"
  #include "env.hpp"
@@ -1739,7 +1739,37 @@ diff -ruN -x data a/src/engine.cu b/src/engine.cu
              hc_read(b.R, apply ? b.bo_f : nullptr, b.inj_f, L.hc_norm[0], L.hc_down[0], L.hc_up[0], L.hc_inj[0], eps, b.mixed,
                      b.inj_a, b.hcs, b.ring.err, T, b.st, b.xq);
              if (!is_attn(l)) {
-@@ -1347,9 +2198,33 @@
+@@ -1183,6 +2034,7 @@
+         b.mtp_emb = dalloc<float>((size_t) MAXT * N);
+         b.mtp_en = dalloc<float>((size_t) MAXT * N);
+         b.mtp_e2 = dalloc<float>((size_t) MAXT * N);
++        if (c == 0 && env_flag("FNX_MTP_NORM_STREAMS")) std::fprintf(stderr, "sfnx: the draft layer's source normalised per stream\n");
+         b.mtp_src = dalloc<float>((size_t) MAXT * D);
+         b.mtp_hn = dalloc<float>((size_t) MAXT * D);
+         b.mtp_h2 = dalloc<float>((size_t) MAXT * D);
+@@ -1251,7 +2103,9 @@
+         rms_norm_rows(b.mtp_emb, mc.norm_emb, b.mtp_en, T, N, eps, b.st);
+         quantize_q8_1(b.mtp_en, b.xq, N, T, b.st);
+         dense(mc.fc_emb, b.xq, b.mtp_e2, b, T);
+-        rms_norm_rows(b.mtp_src, mc.norm_hid, b.mtp_hn, T, D, eps, b.st);
++        static const bool norm_streams = env_flag("FNX_MTP_NORM_STREAMS");   // mtp_norm_patch.py: each stream on its own
++        if (norm_streams) rms_norm_streams(b.mtp_src, mc.norm_hid, b.mtp_hn, T, HC, N, eps, b.st);
++        else rms_norm_rows(b.mtp_src, mc.norm_hid, b.mtp_hn, T, D, eps, b.st);
+         quantize_q8_1(b.mtp_hn, b.xq, N, HC * T, b.st);
+         for (int r0 = 0; r0 < HC * T; r0 += MAXT)   // every stream of every row through fc_hidden
+             q8s_gemv(mc.fc_hid.s, N, N, (const uint8_t*) b.xq + (size_t) r0 * q8_1_bytes(N), b.mtp_h2 + (size_t) r0 * N, N,
+@@ -1295,7 +2149,9 @@
+         rms_norm_rows(b.mtp_emb, mc.norm_emb, b.mtp_en, T, N, eps, b.st);
+         quantize_q8_1(b.mtp_en, b.xq, N, T, b.st);
+         dense(mc.fc_emb, b.xq, b.mtp_e2, b, T);
+-        rms_norm_rows(b.mtp_src, mc.norm_hid, b.mtp_hn, T, D, eps, b.st);
++        static const bool norm_streams = env_flag("FNX_MTP_NORM_STREAMS");   // mtp_norm_patch.py: each stream on its own
++        if (norm_streams) rms_norm_streams(b.mtp_src, mc.norm_hid, b.mtp_hn, T, HC, N, eps, b.st);
++        else rms_norm_rows(b.mtp_src, mc.norm_hid, b.mtp_hn, T, D, eps, b.st);
+         quantize_q8_1(b.mtp_hn, b.xq, N, HC * T, b.st);
+         for (int r0 = 0; r0 < HC * T; r0 += MAXT)
+             q8s_gemv(mc.fc_hid.s, N, N, (const uint8_t*) b.xq + (size_t) r0 * q8_1_bytes(N), b.mtp_h2 + (size_t) r0 * N, N, std::min(MAXT, HC * T - r0), b.st);
+@@ -1347,9 +2203,33 @@
              if (reqs[(size_t) i].cands && nv > 0) {
                  ck(cudaMemsetAsync(b.mtp_tk_err_l + i, 0, 4, b.st), "draft top err");
                  fnx::top_tokens(b.mtp_logits + (size_t) (off[(size_t) i] + reqs[(size_t) i].T - 1) * nv, nv, 1, mc.dv0, b.mtp_zero, b.mtp_zero, b.mtp_zero, 0,
@@ -1775,8 +1805,8 @@ diff -ruN -x data a/src/engine.cu b/src/engine.cu
 +}
 +}  // namespace fnx
 diff -ruN -x data a/src/engine.hpp b/src/engine.hpp
---- a/src/engine.hpp	2026-11-15 06:43:51.731442800 +0100
-+++ b/src/engine.hpp	2026-11-15 06:43:52.173684600 +0100
+--- a/src/engine.hpp	2026-11-18 11:03:26.155633200 +0100
++++ b/src/engine.hpp	2026-11-18 11:03:26.344057600 +0100
 @@ -38,6 +38,15 @@
  // Read at each call like ring_f32 (the Engine and the lab's identity record); anything else not above 1 throws
  double rope_scale();
@@ -1904,8 +1934,8 @@ diff -ruN -x data a/src/engine.hpp b/src/engine.hpp
      void prefill_pass(const std::vector<PfChunk>& chunks, bool staging, const std::function<void()>& between);
      float* pf_emb_[PF_SETS] = {};   // pinned, a set per chunk of two passes: its token embeddings and PLE rows (PF_C rows of N), (position, tag)s
 diff -ruN -x data a/src/engine_common.cu b/src/engine_common.cu
---- a/src/engine_common.cu	2026-11-15 06:43:51.774844200 +0100
-+++ b/src/engine_common.cu	2026-11-15 06:43:52.297965500 +0100
+--- a/src/engine_common.cu	2026-11-18 11:03:25.843521100 +0100
++++ b/src/engine_common.cu	2026-11-18 11:03:26.691332700 +0100
 @@ -1,10 +1,17 @@
  // The parts of the Engine (engine.hpp) that do not depend on the model, for every model's build: see engine_parts.hpp.
  #include "engine_parts.hpp"
@@ -2298,8 +2328,8 @@ diff -ruN -x data a/src/engine_common.cu b/src/engine_common.cu
          ck(cudaEventRecord(b.ev1, b.st), "event");
          ck(cudaMemcpyAsync(&h_.bv[c], b.mtp_bv + last, 4, cudaMemcpyDeviceToHost, b.st), "draft v");
 diff -ruN -x data a/src/engine_impl.hpp b/src/engine_impl.hpp
---- a/src/engine_impl.hpp	2026-11-15 06:43:51.733474900 +0100
-+++ b/src/engine_impl.hpp	2026-11-15 06:43:52.238403700 +0100
+--- a/src/engine_impl.hpp	2026-11-18 11:03:26.098314400 +0100
++++ b/src/engine_impl.hpp	2026-11-18 11:03:26.529796200 +0100
 @@ -3,6 +3,7 @@
  
  #include <cuda_runtime.h>
@@ -2391,8 +2421,8 @@ diff -ruN -x data a/src/engine_impl.hpp b/src/engine_impl.hpp
 +
  }  // namespace fnx
 diff -ruN -x data a/src/engine_parts.hpp b/src/engine_parts.hpp
---- a/src/engine_parts.hpp	2026-11-15 06:43:51.776859900 +0100
-+++ b/src/engine_parts.hpp	2026-11-15 06:43:52.222341900 +0100
+--- a/src/engine_parts.hpp	2026-11-18 11:03:25.720411000 +0100
++++ b/src/engine_parts.hpp	2026-11-18 11:03:26.501135900 +0100
 @@ -52,7 +52,8 @@
  #endif
  
@@ -2412,8 +2442,8 @@ diff -ruN -x data a/src/engine_parts.hpp b/src/engine_parts.hpp
  }
  
 diff -ruN -x data a/src/gdn_core.cuh b/src/gdn_core.cuh
---- a/src/gdn_core.cuh	2026-11-15 06:43:51.741035700 +0100
-+++ b/src/gdn_core.cuh	2026-11-15 06:43:52.279128700 +0100
+--- a/src/gdn_core.cuh	2026-11-18 11:03:26.087550500 +0100
++++ b/src/gdn_core.cuh	2026-11-18 11:03:26.651097500 +0100
 @@ -4,8 +4,10 @@
  // hist: [2 parities][3][ch]; this window reads parity tag & 1 and writes the other (the head's q/k channels are read by
  // its three value heads' blocks, so only block 0 of the head with s == 0 writes them, into the other buffer).
@@ -2513,8 +2543,8 @@ diff -ruN -x data a/src/gdn_core.cuh b/src/gdn_core.cuh
      // ---- the head's last block: gated RMS norm and q8_1 for all HS columns
      __shared__ bool last;
 diff -ruN -x data a/src/gguf.cpp b/src/gguf.cpp
---- a/src/gguf.cpp	2026-11-15 06:43:51.864817300 +0100
-+++ b/src/gguf.cpp	2026-11-15 06:43:52.213627500 +0100
+--- a/src/gguf.cpp	2026-11-18 11:03:26.151167500 +0100
++++ b/src/gguf.cpp	2026-11-18 11:03:26.471240900 +0100
 @@ -35,11 +35,16 @@
          case T_Q5_K: return {256, 176};
          case T_Q6_K: return {256, 210};
@@ -2628,8 +2658,8 @@ diff -ruN -x data a/src/gguf.cpp b/src/gguf.cpp
      for (Map& mp : maps_) {
          if (mp.base) munmap(mp.base, mp.size);
 diff -ruN -x data a/src/gguf.hpp b/src/gguf.hpp
---- a/src/gguf.hpp	2026-11-15 06:43:51.749637600 +0100
-+++ b/src/gguf.hpp	2026-11-15 06:43:52.183751800 +0100
+--- a/src/gguf.hpp	2026-11-18 11:03:25.990751100 +0100
++++ b/src/gguf.hpp	2026-11-18 11:03:26.372652600 +0100
 @@ -22,8 +22,9 @@
  
  enum GgmlType : uint32_t {
@@ -2664,8 +2694,8 @@ diff -ruN -x data a/src/gguf.hpp b/src/gguf.hpp
  
  // Reads groups of tensors (a layer's, say) into host buffers ahead of the threads that slice them, in the order they
 diff -ruN -x data a/src/hc.cuh b/src/hc.cuh
---- a/src/hc.cuh	2026-11-15 06:43:51.868021800 +0100
-+++ b/src/hc.cuh	2026-11-15 06:43:52.248530800 +0100
+--- a/src/hc.cuh	2026-11-18 11:03:25.796165100 +0100
++++ b/src/hc.cuh	2026-11-18 11:03:26.563518600 +0100
 @@ -1,27 +1,28 @@
 -// The hyper-connection read (build_hc_mix) in one launch of H_NS * H_RG = 80 blocks' work, with two grid barriers
 +// The hyper-connection read (build_hc_mix) in one launch of H_NS * H_RG = 56 blocks' work, with two grid barriers
@@ -3005,7 +3035,7 @@ diff -ruN -x data a/src/hc.cuh b/src/hc.cuh
  }  // namespace
 diff -ruN -x data a/src/iq3s_x.cuh b/src/iq3s_x.cuh
 --- a/src/iq3s_x.cuh	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/iq3s_x.cuh	2026-11-15 06:43:52.307098200 +0100
++++ b/src/iq3s_x.cuh	2026-11-18 11:03:26.722890900 +0100
 @@ -0,0 +1,41 @@
 +// iq3s_x.cuh: ggml's vec_dot_iq3_s_q8_1 (ggml-cuda/vecdotq.cuh) with its two ggml_cuda_dp4a calls a step in p100_compat.h's
 +// xmad form (fnx_dp4a_xmad); nothing else differs (gen_iq3s_x.sh makes it from that file; idea 67, moe_x_patch.py). On sm_60
@@ -3049,8 +3079,8 @@ diff -ruN -x data a/src/iq3s_x.cuh b/src/iq3s_x.cuh
 +    return d * sumi;
 +}
 diff -ruN -x data a/src/kernels.cu b/src/kernels.cu
---- a/src/kernels.cu	2026-11-15 06:43:51.752177800 +0100
-+++ b/src/kernels.cu	2026-11-15 06:43:52.253222800 +0100
+--- a/src/kernels.cu	2026-11-18 11:03:25.867476200 +0100
++++ b/src/kernels.cu	2026-11-18 11:03:26.568644000 +0100
 @@ -13,6 +13,9 @@
  #include <cstring>
  #include <stdexcept>
@@ -3134,15 +3164,15 @@ diff -ruN -x data a/src/kernels.cu b/src/kernels.cu
      float4 wv[NC];
 +    if constexpr (BF) {
 +        const uint2* w2 = reinterpret_cast<const uint2*>(reinterpret_cast<const uint16_t*>(W) + (size_t) row * N) + part * NC * 32;
- #pragma unroll
--    for (int i = 0; i < NC; ++i) wv[i] = __ldg(w4 + i * 32 + lane);
++#pragma unroll
 +        for (int i = 0; i < NC; ++i) {
 +            const uint2 u = __ldg(w2 + i * 32 + lane);
 +            wv[i] = make_float4(__uint_as_float(u.x << 16), __uint_as_float(u.x & 0xffff0000u), __uint_as_float(u.y << 16), __uint_as_float(u.y & 0xffff0000u));
 +        }
 +    } else {
 +        const float4* w4 = reinterpret_cast<const float4*>(W + (size_t) row * N) + part * NC * 32;
-+#pragma unroll
+ #pragma unroll
+-    for (int i = 0; i < NC; ++i) wv[i] = __ldg(w4 + i * 32 + lane);
 +        for (int i = 0; i < NC; ++i) wv[i] = __ldg(w4 + i * 32 + lane);
 +    }
      float s[T];
@@ -3795,9 +3825,32 @@ diff -ruN -x data a/src/kernels.cu b/src/kernels.cu
  #endif
          else if (rows >= 4096) q8s_launch<2, SEG>(g, rows, cols, yq, T, s);
          else q8s_launch<1, SEG>(g, rows, cols, yq, T, s);
+@@ -2392,6 +2835,22 @@
+     k_rms_norm_rows<<<rows, 1024, 0, (cudaStream_t) st>>>(x, w, y, n, eps);
+     ck_launch("rms_norm_rows");
+ }
++namespace {
++// y[r][c] = x[r][c] / sqrt(mean(x[r][c]^2) + eps) * w[c], a block per stream (mtp_norm_patch.py)
++__global__ void k_rms_norm_streams(const float* x, const float* w, float* y, int hc, int n, float eps) {
++    __shared__ float sh[32];
++    const float* xr = x + (size_t) blockIdx.x * n;
++    const float* wr = w + (size_t) (blockIdx.x % hc) * n;
++    float s = 0.f;
++    for (int i = threadIdx.x; i < n; i += blockDim.x) s += xr[i] * xr[i];
++    const float r = rsqrtf(block_sum(s, sh) / (float) n + eps);
++    for (int i = threadIdx.x; i < n; i += blockDim.x) y[(size_t) blockIdx.x * n + i] = xr[i] * r * wr[i];
++}
++}  // namespace
++void rms_norm_streams(const float* x, const float* w, float* y, int rows, int hc, int n, float eps, void* st) {
++    k_rms_norm_streams<<<rows * hc, 1024, 0, (cudaStream_t) st>>>(x, w, y, hc, n, eps);
++    ck_launch("rms_norm_streams");
++}
+ void add_streams(const float* h, const float* e, float* R, int T, void* st) {
+     k_add_streams<<<dim3((D + 255) / 256, T), 256, 0, (cudaStream_t) st>>>(h, e, R);
+     ck_launch("add_streams");
 diff -ruN -x data a/src/kernels.hpp b/src/kernels.hpp
---- a/src/kernels.hpp	2026-11-15 06:43:51.840685100 +0100
-+++ b/src/kernels.hpp	2026-11-15 06:43:52.175699100 +0100
+--- a/src/kernels.hpp	2026-11-18 11:03:25.862123500 +0100
++++ b/src/kernels.hpp	2026-11-18 11:03:26.363813700 +0100
 @@ -28,7 +28,7 @@
  #define FNX_PF_JOB 64
  #endif
@@ -3876,7 +3929,7 @@ diff -ruN -x data a/src/kernels.hpp b/src/kernels.hpp
  };
  
  // the sum across the cards (ring; words of two fp16 values and a tag); bufs are this card's receive buffers, peers'
-@@ -362,6 +398,10 @@
+@@ -362,8 +398,14 @@
  // R += bo * 2 sigmoid(inj / HC) per stream: a pending write applied on its own (before the PLE block)
  void hc_write(float* R, const float* bo, const float* inj, int T, void* st);
  
@@ -3886,8 +3939,12 @@ diff -ruN -x data a/src/kernels.hpp b/src/kernels.hpp
 +
  // y[r] = x[r] / sqrt(mean(x[r]^2) + eps) * w for rows of n
  void rms_norm_rows(const float* x, const float* w, float* y, int rows, int n, float eps, void* st);
++// rms_norm_rows with each of a row's hc streams of n normalised on its own (w of hc * n): FNX_MTP_NORM_STREAMS
++void rms_norm_streams(const float* x, const float* w, float* y, int rows, int hc, int n, float eps, void* st);
  // the draft layer's input: R[t][c] = h[t][c] + e[t] for each of the HC streams (h rows of D, e rows of N)
-@@ -397,7 +437,11 @@
+ void add_streams(const float* h, const float* e, float* R, int T, void* st);
+ 
+@@ -397,7 +439,11 @@
  // into out_v / out_i (logit descending, id ascending on ties, however many tie); err bit 16: a logit was NaN or inf
  // before the penalties
  constexpr int TOPK_N = 64;
@@ -3901,8 +3958,8 @@ diff -ruN -x data a/src/kernels.hpp b/src/kernels.hpp
  
  }  // namespace fnx
 diff -ruN -x data a/src/model.cpp b/src/model.cpp
---- a/src/model.cpp	2026-11-15 06:43:51.756295900 +0100
-+++ b/src/model.cpp	2026-11-15 06:43:52.315992300 +0100
+--- a/src/model.cpp	2026-11-18 11:03:25.716692700 +0100
++++ b/src/model.cpp	2026-11-18 11:03:26.786603100 +0100
 @@ -29,9 +29,16 @@
  #include <cstring>
  #include <stdexcept>
@@ -4760,8 +4817,8 @@ diff -ruN -x data a/src/model.cpp b/src/model.cpp
  }  // namespace
  
 diff -ruN -x data a/src/model.hpp b/src/model.hpp
---- a/src/model.hpp	2026-11-15 06:43:51.800478400 +0100
-+++ b/src/model.hpp	2026-11-15 06:43:52.314979700 +0100
+--- a/src/model.hpp	2026-11-18 11:03:25.736525600 +0100
++++ b/src/model.hpp	2026-11-18 11:03:26.768216300 +0100
 @@ -55,6 +55,15 @@
  
  namespace fnx {
@@ -4866,8 +4923,8 @@ diff -ruN -x data a/src/model.hpp b/src/model.hpp
      // the residency and arena settings (FNX_EXPERT_RAM_GIB, FNX_ARENA, FNX_EXPERT_PROFILE) read again
      void choose_residency();
 diff -ruN -x data a/src/moe.cuh b/src/moe.cuh
---- a/src/moe.cuh	2026-11-15 06:43:51.758734800 +0100
-+++ b/src/moe.cuh	2026-11-15 06:43:52.256707800 +0100
+--- a/src/moe.cuh	2026-11-18 11:03:25.971131300 +0100
++++ b/src/moe.cuh	2026-11-18 11:03:26.593154600 +0100
 @@ -5,12 +5,17 @@
  // Output rows: pair t*TOPK+k. The shared expert runs beside them as dense launches into rows T*TOPK+t; the weighted
  // sum happens in the ring.
@@ -5565,8 +5622,8 @@ diff -ruN -x data a/src/moe.cuh b/src/moe.cuh
          return;
      }
 diff -ruN -x data a/src/moe_mma.cu b/src/moe_mma.cu
---- a/src/moe_mma.cu	2026-11-15 06:43:51.844288900 +0100
-+++ b/src/moe_mma.cu	2026-11-15 06:43:52.294392900 +0100
+--- a/src/moe_mma.cu	2026-11-18 11:03:25.830602400 +0100
++++ b/src/moe_mma.cu	2026-11-18 11:03:26.684965600 +0100
 @@ -33,6 +33,32 @@
  
  namespace fnx {
@@ -5607,7 +5664,7 @@ diff -ruN -x data a/src/moe_mma.cu b/src/moe_mma.cu
 +#endif
 diff -ruN -x data a/src/p100_attn.cuh b/src/p100_attn.cuh
 --- a/src/p100_attn.cuh	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/p100_attn.cuh	2026-11-15 06:43:52.208099100 +0100
++++ b/src/p100_attn.cuh	2026-11-18 11:03:26.438139900 +0100
 @@ -0,0 +1,458 @@
 +// p100_attn.cuh: a prompt chunk's attention on GP100, int8 K/V: Strata's score and value kernels for the P100 (src/kernels/cuda/qsa_pattn.cu, PR #3943) over the split
 +// engine's paged K/V and partials. A lane keeps 8 dimensions of its 12 query heads in registers, so a cell costs it one read of shared memory for 96 products; the
@@ -6069,7 +6126,7 @@ diff -ruN -x data a/src/p100_attn.cuh b/src/p100_attn.cuh
 +}  // namespace fnx
 diff -ruN -x data a/src/p100_dma.cuh b/src/p100_dma.cuh
 --- a/src/p100_dma.cuh	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/p100_dma.cuh	2026-11-15 06:43:52.164278900 +0100
++++ b/src/p100_dma.cuh	2026-11-18 11:03:26.333889300 +0100
 @@ -0,0 +1,391 @@
 +// p100_dma.cuh: a decode layer's missing experts copied by the card's copy engine (FNX_P100_DMA=1), beside the row kernels of the ones in VRAM, so the copy takes no SM away from them
 +// (the side-stream copy kernel did, and lost at T = 2). The plan's list goes to a mailbox in mapped host memory (k_dma_publish: each expert's host copies and slot), a host thread
@@ -6464,7 +6521,7 @@ diff -ruN -x data a/src/p100_dma.cuh b/src/p100_dma.cuh
 +}  // namespace fnx
 diff -ruN -x data a/src/p100_dma_box.cuh b/src/p100_dma_box.cuh
 --- a/src/p100_dma_box.cuh	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/p100_dma_box.cuh	2026-11-15 06:43:52.236391900 +0100
++++ b/src/p100_dma_box.cuh	2026-11-18 11:03:26.526171700 +0100
 @@ -0,0 +1,27 @@
 +// p100_dma_box.cuh: the copy engine's mailbox and its words in VRAM (p100_dma.cuh); the router's last block writes them too (FNX_FOLD,
 +// moe.cuh). Included inside fnx's unnamed namespace.
@@ -6495,7 +6552,7 @@ diff -ruN -x data a/src/p100_dma_box.cuh b/src/p100_dma_box.cuh
 +#endif
 diff -ruN -x data a/src/p100_iq_gemm.cuh b/src/p100_iq_gemm.cuh
 --- a/src/p100_iq_gemm.cuh	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/p100_iq_gemm.cuh	2026-11-15 06:43:52.170046300 +0100
++++ b/src/p100_iq_gemm.cuh	2026-11-18 11:03:26.339479100 +0100
 @@ -0,0 +1,895 @@
 +// p100_iq_gemm.cuh - GP100, the prompt path's expert products: IQ / Q2_0 weights decoded straight into shared memory, FP16 activations, FP32 sums.
 +// Include after ggml-common.h (blocks, grids) and cuda_fp16.h.
@@ -7394,7 +7451,7 @@ diff -ruN -x data a/src/p100_iq_gemm.cuh b/src/p100_iq_gemm.cuh
 +}  // namespace strata::kernels::p100f::iqg
 diff -ruN -x data a/src/p100_moe.cu b/src/p100_moe.cu
 --- a/src/p100_moe.cu	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/p100_moe.cu	2026-11-15 06:43:52.241556300 +0100
++++ b/src/p100_moe.cu	2026-11-18 11:03:26.537344600 +0100
 @@ -0,0 +1,740 @@
 +// The prompt path's routed experts on GP100: Strata's FP16 expert kernel (p100_iq_gemm.cuh) over the split engine's jobs.
 +// An expert's tokens come from its BigJob instead of a contiguous range, and its matrix from moe_expert (a VRAM slot or the mapped host copy).
@@ -8138,7 +8195,7 @@ diff -ruN -x data a/src/p100_moe.cu b/src/p100_moe.cu
 +}  // namespace fnx
 diff -ruN -x data a/src/p100_moe_rows.cuh b/src/p100_moe_rows.cuh
 --- a/src/p100_moe_rows.cuh	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/p100_moe_rows.cuh	2026-11-15 06:43:52.222341900 +0100
++++ b/src/p100_moe_rows.cuh	2026-11-18 11:03:26.473540600 +0100
 @@ -0,0 +1,615 @@
 +// p100_moe_rows.cuh: a decode window's routed experts on GP100: few tokens per expert, so a lane owns a row and nothing waits in shared memory.
 +// gemm4 (p100_iq_gemm.cuh) is built for a prompt chunk: its 48 x 128 tile fills shared memory, so an SM holds one block and a block decodes its weights
@@ -8757,7 +8814,7 @@ diff -ruN -x data a/src/p100_moe_rows.cuh b/src/p100_moe_rows.cuh
 +}  // namespace fnx
 diff -ruN -x data a/src/p100_over.hpp b/src/p100_over.hpp
 --- a/src/p100_over.hpp	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/p100_over.hpp	2026-11-15 06:43:52.287202100 +0100
++++ b/src/p100_over.hpp	2026-11-18 11:03:26.677926700 +0100
 @@ -0,0 +1,80 @@
 +// p100_over.hpp: a decode layer's missing experts copied on a stream of their own while the ones in VRAM are computed (p100_moe_rows.cuh).
 +#pragma once
@@ -8840,8 +8897,8 @@ diff -ruN -x data a/src/p100_over.hpp b/src/p100_over.hpp
 +                      float* part, float* scratch, void* st);
 +}  // namespace fnx
 diff -ruN -x data a/src/pf_common.cuh b/src/pf_common.cuh
---- a/src/pf_common.cuh	2026-11-15 06:43:51.801491800 +0100
-+++ b/src/pf_common.cuh	2026-11-15 06:43:52.154037400 +0100
+--- a/src/pf_common.cuh	2026-11-18 11:03:26.011264700 +0100
++++ b/src/pf_common.cuh	2026-11-18 11:03:26.297180900 +0100
 @@ -41,10 +41,25 @@
  // the prompt path's allocations on the card being set up: reset per card as it is built; Flash-Next's later stages
  // save and restore it around their own, and the 27B allocates nothing after prefill_alloc
@@ -8907,8 +8964,8 @@ diff -ruN -x data a/src/pf_common.cuh b/src/pf_common.cuh
                  if (r.dma)
                      for (int p = 0; p < NCARD; ++p)
 diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
---- a/src/prefill.cu	2026-11-15 06:43:51.854396600 +0100
-+++ b/src/prefill.cu	2026-11-15 06:43:52.310628800 +0100
+--- a/src/prefill.cu	2026-11-18 11:03:25.808273300 +0100
++++ b/src/prefill.cu	2026-11-18 11:03:26.762556500 +0100
 @@ -7,6 +7,7 @@
  // What the chunk leaves is the state a run of windows over the same rows leaves: K/V, recurrent states and
  // histories, the PLE history, the QSA keys, and with the draft layer attached its K/V and QSA keys too (the draft layer
@@ -9541,7 +9598,18 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
          p.alloc_bytes = pf_card_bytes;
          if (env_flag("FNX_PF_TIMING"))
              std::fprintf(stderr, "prefill on card %d: passes of %d chunks, stages of %zu MiB\n", c, p.pass, p.stage_bytes >> 20);
-@@ -981,6 +1363,26 @@
+@@ -959,7 +1341,9 @@
+         rms_norm_rows(p.ple_emb, mc.norm_emb, p.mixed, C, N, eps, s);   // mixed: free until the hc read below
+         pf_dense(p, mc.fc_emb.s, N, N, p.mixed, C, p.bo_f, N, s);
+         // the source: one RMS over the four streams, then fc_hidden per stream (HC * C rows of N)
+-        rms_norm_rows(p.R, mc.norm_hid, p.xf, C, D, eps, s);
++        static const bool norm_streams = env_flag("FNX_MTP_NORM_STREAMS");   // mtp_norm_patch.py: as Engine::mtp_enqueue
++        if (norm_streams) rms_norm_streams(p.R, mc.norm_hid, p.xf, C, HC, N, eps, s);
++        else rms_norm_rows(p.R, mc.norm_hid, p.xf, C, D, eps, s);
+         pf_dense(p, mc.fc_hid.s, N, N, p.xf, HC * C, p.up32, N, s);
+         add_streams(p.up32, p.bo_f, p.R, C, s);
+         pf_hc_read(p, p.R, nullptr, nullptr, L.hc_norm[0], L.hc_down[0], L.hc_up[0], nullptr, eps, p.mixed, nullptr, C, s);
+@@ -981,6 +1365,26 @@
  
  void Engine::prefill(const std::vector<int>& tokens, int after) {
      if (!pending_.empty() || !rows_pending_.lanes.empty()) throw std::runtime_error("prefill: a window is not committed");
@@ -9568,7 +9636,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
      if (mtp_ && after < 0) throw std::runtime_error("prefill: the draft layer needs the token after the last row");
      if (pf_[0]->seq >= PF_SEQ_RESET) {
          std::fprintf(stderr, "fnx: prompt ring sequence numbers at %u: flags zeroed, numbers from 0 again\n", pf_[0]->seq);
-@@ -1006,18 +1408,39 @@
+@@ -1006,18 +1410,39 @@
      const int h0 = (int) history_.size();
      const auto tok_at = [&](int q) -> int { return q < h0 ? history_[q] : tokens[q - h0]; };
      const size_t nt = tokens.size(), per = (size_t) K * pf_c_;
@@ -9610,7 +9678,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
              i += c.tokens.size();
          }
      };
-@@ -1037,6 +1460,17 @@
+@@ -1037,6 +1462,17 @@
  
  void Engine::prefill_pass(const std::vector<PfChunk>& chunks, bool staging, const std::function<void()>& between) {
      const auto t_pass = std::chrono::steady_clock::now();
@@ -9628,7 +9696,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
      const int nk = (int) chunks.size();
      int rows = 0;
      std::vector<int> pos0((size_t) nk);
-@@ -1096,7 +1530,7 @@
+@@ -1096,7 +1532,7 @@
              for (int l = 0; l < NL; ++l) {
                  const size_t gs = w.L[(size_t) l].gu_e_stride, ds = w.L[(size_t) l].down_e_stride;
                  int n_ram = 0;
@@ -9637,7 +9705,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
                  const int fit = std::min(n_ram, (int) (p.stage_bytes / (gs + ds)));
                  char* gu_at = p.stage[l & 1];
                  char* dn_at = gu_at + (size_t) fit * gs;
-@@ -1110,10 +1544,14 @@
+@@ -1110,10 +1546,14 @@
                  for (int e = 0; e < NEXP; ++e) {
                      const size_t i = (size_t) l * NEXP + e;
                      const int s = p.slot_h[i];
@@ -9653,7 +9721,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
                      } else if (k < fit) {
                          p.ep_hgu[i] = gu_at + (size_t) k * gs, p.ep_hdn[i] = dn_at + (size_t) k * ds;
                          add(w.ec_host_gu[i], gu_at + (size_t) k * gs, gs);
-@@ -1152,11 +1590,12 @@
+@@ -1152,11 +1592,12 @@
      // made here: the next chunk's experts reuse their buffers), while the pass's next chunk computes; `done` marks it
      // finished, and the chunk's next half waits for that alone. A layer runs every chunk's attention half, then every
      // chunk's FFN half, so there is a next chunk to compute meanwhile
@@ -9668,7 +9736,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
          if (p.rccl) p.post.push_back([&p, done] { ckc(cudaEventRecord(done, p.ring_st), "ring done"); });   // after the sum's conversion, once the group is closed
          else ckc(cudaEventRecord(done, p.ring_st), "ring done");
      };
-@@ -1170,6 +1609,274 @@
+@@ -1170,6 +1611,274 @@
          pf_dense(p, w.L[l].wo.s, N, w.nq * HD, p.att, rows, p.boak[j], N, b.st);
          if (l < NL - 1 || mtp_) ring_async(c, b, p, p.boak[j], nullptr, j, p.ev_ra[j], rows);   // the last layer's sum: unused
      };
@@ -9943,7 +10011,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
      for (int l = 0; l < NL; ++l) {
          if (staging && l + 1 < NL - 1) stage_in(l + 1);   // the last layer runs no experts
          for (int j = 0; j < nk; ++j) {
-@@ -1180,6 +1887,7 @@
+@@ -1180,6 +1889,7 @@
                  const LayerW& L = w.L[l];
                  cudaStream_t s = b.st;
                  if (pending && p.overlap) ckc(cudaStreamWaitEvent(s, p.ev_rf[j], 0), "ffn sum");
@@ -9951,7 +10019,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
                  bool apply = pending;
                  if (l == PLE_LAYER) {
                      ckc(cudaMemcpyAsync(p.ple_emb, pf_ple_[set], (size_t) C * N * 4, cudaMemcpyHostToDevice, s), "ple");
-@@ -1194,23 +1902,35 @@
+@@ -1194,23 +1904,35 @@
                                   w.ple_norm_query, w.ple_norm_conv, w.ple_conv, b.ple_hist, b.ple_hsnap, Tg, eps, s, p.ple_tmp);
                      }
                  }
@@ -9987,7 +10055,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
                      // the indexer: bf16 projections as f32 (llama.cpp's choice past 8 rows on a V100)
                      k_bf16_f32<<<grid_for((size_t) 512 * N), 256, 0, s>>>(L.idx_wq, (size_t) 512 * N, p.widx);
                      k_bf16_f32<<<grid_for((size_t) 128 * N), 256, 0, s>>>(L.idx_wk, (size_t) 128 * N, p.widx + (size_t) 512 * N);
-@@ -1218,6 +1938,7 @@
+@@ -1218,6 +1940,7 @@
                      qsa_index(p.yidx, L.idx_qn, L.idx_kn, b.qsa_ring[l], b.qsa_pooled[l], b.pg, p.qidx, p.ctl, C, eps, rope_of(b.mrope), s);
                      // groups of rows (each with the position and tag of its first MAXT group) for QSA's block selection:
                      // qsa_pf_rows (FNX_PF_QSA_ROWS), or attn_rows() when the decode attention takes the groups too
@@ -9995,7 +10063,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
                      const int AR = p.attn_dec ? attn_rows() : p.qsa_pf_rows;
                      for (int g = 0; g * AR < C; ++g) {
                          const int r0 = g * AR, Tg = std::min(AR, C - r0);
-@@ -1229,17 +1950,20 @@
+@@ -1229,17 +1952,20 @@
                               (const unsigned*) (gctl + 1), 128 + l, gctl, Tg, b.att_part, s, p.cells + (size_t) r0 * qsa_maxsel(),
                               p.ncells + r0);
                      }
@@ -10016,7 +10084,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
                  if (p.ring_sm) ring_sum(p.ring, p.bo_a, C, (const unsigned*) (p.ctl + 1), 2 * l, b.st);
                  else if (p.overlap) {
                      if (!is_attn(l) || p.attn_dec) ring_async(c, b, p, p.bo_a, nullptr, j, p.ev_ra[j], C);   // else finish_att's
-@@ -1262,45 +1986,94 @@
+@@ -1262,45 +1988,94 @@
                  continue;
              }
              // ---- FFN half
@@ -10131,7 +10199,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
                  if (p.ring_sm) ring_sum(p.ring, p.bo_f, C, (const unsigned*) (p.ctl + 1), 2 * l + 1, b.st, m);
                  else if (p.overlap) ring_async(c, b, p, p.bo_f, &m, j, p.ev_rf[j], C);
                  else pf_ring(p, c, p.bo_f, C, &m, b.ring.err, b.st);
-@@ -1308,14 +2081,19 @@
+@@ -1308,14 +2083,19 @@
          }
      }
      static const bool draft8 = env_flag("FNX_PF_DRAFT8");
@@ -10152,7 +10220,7 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
      unsigned err = 0;
      // bounded: a copy-engine ring step waits on its flag without a timeout of its own
      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
-@@ -1349,7 +2127,18 @@
+@@ -1349,7 +2129,18 @@
          }
      use(0);
      for (const PfChunk& c : chunks) history_.insert(history_.end(), c.tokens.begin(), c.tokens.end());
@@ -10172,8 +10240,8 @@ diff -ruN -x data a/src/prefill.cu b/src/prefill.cu
      if (timing) {
          std::fprintf(stderr, "prefill pass at %d: %d chunks, %d rows in %.1f ms (embed + upload %.1f ms, enqueued in %.1f ms, draft layer %.1f ms)",
 diff -ruN -x data a/src/qsa.cuh b/src/qsa.cuh
---- a/src/qsa.cuh	2026-11-15 06:43:51.807618400 +0100
-+++ b/src/qsa.cuh	2026-11-15 06:43:52.257719200 +0100
+--- a/src/qsa.cuh	2026-11-18 11:03:25.729977600 +0100
++++ b/src/qsa.cuh	2026-11-18 11:03:26.597227200 +0100
 @@ -155,6 +155,126 @@
      scores[(size_t) t * max_pools + j] = s;
  }
@@ -10655,8 +10723,8 @@ diff -ruN -x data a/src/qsa.cuh b/src/qsa.cuh
 +
  }  // namespace
 diff -ruN -x data a/src/session.cpp b/src/session.cpp
---- a/src/session.cpp	2026-11-15 06:43:51.819581800 +0100
-+++ b/src/session.cpp	2026-11-15 06:43:52.303073200 +0100
+--- a/src/session.cpp	2026-11-18 11:03:26.042784200 +0100
++++ b/src/session.cpp	2026-11-18 11:03:26.716193000 +0100
 @@ -7,6 +7,7 @@
  #include <chrono>
  #include <cstdio>
@@ -10942,8 +11010,8 @@ diff -ruN -x data a/src/session.cpp b/src/session.cpp
  }
  
 diff -ruN -x data a/src/session.hpp b/src/session.hpp
---- a/src/session.hpp	2026-11-15 06:43:51.823613900 +0100
-+++ b/src/session.hpp	2026-11-15 06:43:52.213627500 +0100
+--- a/src/session.hpp	2026-11-18 11:03:25.690386600 +0100
++++ b/src/session.hpp	2026-11-18 11:03:26.465550500 +0100
 @@ -21,6 +21,7 @@
      float pen_repeat = 1.f, pen_freq = 0.f, pen_present = 0.f;
      int pen_last_n = 64;
@@ -10998,8 +11066,8 @@ diff -ruN -x data a/src/session.hpp b/src/session.hpp
  
  }  // namespace fnx
 diff -ruN -x data a/src/tensor_convert.hpp b/src/tensor_convert.hpp
---- a/src/tensor_convert.hpp	2026-11-15 06:43:51.850373400 +0100
-+++ b/src/tensor_convert.hpp	2026-11-15 06:43:52.249556600 +0100
+--- a/src/tensor_convert.hpp	2026-11-18 11:03:25.969118500 +0100
++++ b/src/tensor_convert.hpp	2026-11-18 11:03:26.565915000 +0100
 @@ -59,6 +59,75 @@
      static const int8_t k[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
      return k;
@@ -11112,8 +11180,8 @@ diff -ruN -x data a/src/tensor_convert.hpp b/src/tensor_convert.hpp
      throw std::runtime_error("tensor_convert: no reader for ggml type " + std::to_string(type));
  }
 diff -ruN -x data a/src/topk.cuh b/src/topk.cuh
---- a/src/topk.cuh	2026-11-15 06:43:51.838415200 +0100
-+++ b/src/topk.cuh	2026-11-15 06:43:52.247103700 +0100
+--- a/src/topk.cuh	2026-11-18 11:03:25.687387300 +0100
++++ b/src/topk.cuh	2026-11-18 11:03:26.560443900 +0100
 @@ -1,5 +1,5 @@
  // The sampler's candidates (included by kernels.cu): per verify row, this card's slice of the head's logits with the
 -// row's penalties applied (llama.cpp's penalties stage, as Strata applies it: repeat multiplies a non-positive logit
@@ -11163,8 +11231,8 @@ diff -ruN -x data a/src/topk.cuh b/src/topk.cuh
          __syncthreads();
          if (tid == 0) {
 diff -ruN -x data a/tools/sfnx.cpp b/tools/sfnx.cpp
---- a/tools/sfnx.cpp	2026-11-15 06:43:51.958707200 +0100
-+++ b/tools/sfnx.cpp	2026-11-15 06:43:52.333196500 +0100
+--- a/tools/sfnx.cpp	2026-11-18 11:03:25.596303800 +0100
++++ b/tools/sfnx.cpp	2026-11-18 11:03:26.844808000 +0100
 @@ -18,6 +18,7 @@
  // cancel, then BADM <slot> 0), and so does a STOP for the request decoding in a slot; BYIELD <slot> ends its prompt
  // read at the next chunk (YIELDED <slot> <read>). STOP, BSTOP and BYIELD act on the requests whose lines came before
