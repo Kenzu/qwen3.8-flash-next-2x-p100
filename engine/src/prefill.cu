@@ -13,6 +13,7 @@
 #include "engine_impl.hpp"
 #include "env.hpp"
 #include "pf_ring_plan.hpp"
+#include "p100_mmq.hpp"
 #if FNX_HIP
 #include "hip/rccl.h"
 #endif
@@ -41,6 +42,19 @@
 namespace fnx {
 
 namespace {
+
+// The regular prompt paths share this dispatch. Latent projections have a separate row layout.
+void pf_expert_product(decltype(moe_gate_up_mma)& fp16, void* scratch, int input_rows,
+                       const DW& w, size_t stride, const BigJob* jobs, const int* count, int cap,
+                       const uint16_t* x, float* out, void* stream) {
+#if FNX_ARCH == 60 && FNX_NCARD == 2 && !FNX_HIP
+    if (scratch && w.type == T_IQ4_NL && w.n_in >= 256) {
+        p100_mmq(w, stride, jobs, count, cap, x, input_rows, out, scratch, stream);
+        return;
+    }
+#endif
+    fp16(w, stride, jobs, count, cap, x, out, stream);
+}
 
 constexpr size_t PF_WH = (size_t) 16 << 20;                      // halves: a dense matrix's f16 staging (larger ones go in slices)
 
@@ -420,6 +434,7 @@ struct Engine::Pf {
     __half* lo16;
     void* xq;                         // mixed as q8_1 (with a twin), for the experts through the decode kernels
     uint16_t* h16;                    // the experts' swiglu rows as f16, for the tensor-core down product
+    void* mmq_scratch = nullptr;      // per-card activation buffer, reused on the prompt stream
     bool moe_q8 = false;              // FNX_PF_MOE_Q8=1: the experts through the decode kernels' q8_1 arithmetic
     float *logits, *topw, *gu, *part, *shg;
     __half* shh;
@@ -1061,6 +1076,17 @@ void Engine::prefill_alloc() {
         p->inj_a = palloc<float>((size_t) pf_c_ * HC);
         p->inj_f = palloc<float>((size_t) pf_c_ * HC);
         p->moe_q8 = env_flag("FNX_PF_MOE_Q8");
+        if (env_flag("FNX_PF_MMQ")) {
+#if FNX_ARCH == 60 && FNX_NCARD == 2 && !FNX_HIP
+            if (p->moe_q8 || std::getenv("FNX_LATENT"))
+                throw std::runtime_error("FNX_PF_MMQ needs the regular FP16 prompt path");
+            const size_t bytes = std::max(p100_mmq_bytes(pf_c_, N), p100_mmq_bytes(pf_c_ * TOPK, ffs));
+            p->mmq_scratch = palloc<uint8_t>(bytes);
+            std::fprintf(stderr, "fnx: GPU %d: IQ4_NL MMQ enabled for prompt experts (%zu bytes scratch)\n", b.dev, bytes);
+#else
+            throw std::runtime_error("FNX_PF_MMQ requires the two-card sm_60 engine");
+#endif
+        }
         if (p->moe_q8) {
             p->xq = palloc<uint8_t>((size_t) pf_c_ * q8_1_bytes(N));
             q8_twin(p->xq, (size_t) pf_c_ * q8_1_bytes(N), palloc<int8_t>((size_t) pf_c_ * N), palloc<float>((size_t) pf_c_ * N / 32));
@@ -1843,10 +1869,10 @@ void Engine::prefill_pass(const std::vector<PfChunk>& chunks, bool staging, cons
                         moe_gate_up_big(gu_e, L.gu_e_stride, p.jobs_gu, p.njobs, pf_jobs_, p.xq, p.gu, s);
                         moe_down_big(down_e, L.down_e_stride, p.jobs_dn, p.njobs, pf_jobs_, p.gu, p.part, s);
                     } else {
-                        moe_gate_up_mma(gu_e, L.gu_e_stride, p.jobs_gu, p.njobs, pf_jobs_, reinterpret_cast<const uint16_t*>(p.xh), p.gu, s);
+                        pf_expert_product(moe_gate_up_mma, p.mmq_scratch, C, gu_e, L.gu_e_stride, p.jobs_gu, p.njobs, pf_jobs_, reinterpret_cast<const uint16_t*>(p.xh), p.gu, s);
                         swiglu_h16(p.gu, ffs, P, p.h16, s);
                         pf_prof_mark(b, PF_DOWN);
-                        moe_down_mma(down_e, L.down_e_stride, p.jobs_dn, p.njobs, pf_jobs_, p.h16, p.part, s);
+                        pf_expert_product(moe_down_mma, p.mmq_scratch, P, down_e, L.down_e_stride, p.jobs_dn, p.njobs, pf_jobs_, p.h16, p.part, s);
                     }
                     if (lph == lph_n - 1) {   // edge0_patch6.py: the rest in the last pass
                         if (staging && j == nk - 1) ckc(cudaEventRecord(p.ev_done[l & 1], s), "stage done");
@@ -2054,10 +2080,10 @@ void Engine::prefill_pass(const std::vector<PfChunk>& chunks, bool staging, cons
                     moe_gate_up_big(gu_e, L.gu_e_stride, p.jobs_gu, p.njobs, pf_jobs_, p.xq, p.gu, s);
                     moe_down_big(down_e, L.down_e_stride, p.jobs_dn, p.njobs, pf_jobs_, p.gu, p.part, s);
                 } else {
-                    moe_gate_up_mma(gu_e, L.gu_e_stride, p.jobs_gu, p.njobs, pf_jobs_, reinterpret_cast<const uint16_t*>(p.xh), p.gu, s);
+                    pf_expert_product(moe_gate_up_mma, p.mmq_scratch, C, gu_e, L.gu_e_stride, p.jobs_gu, p.njobs, pf_jobs_, reinterpret_cast<const uint16_t*>(p.xh), p.gu, s);
                     swiglu_h16(p.gu, ffs, P, p.h16, s);
                     pf_prof_mark(b, PF_DOWN);
-                    moe_down_mma(down_e, L.down_e_stride, p.jobs_dn, p.njobs, pf_jobs_, p.h16, p.part, s);
+                    pf_expert_product(moe_down_mma, p.mmq_scratch, P, down_e, L.down_e_stride, p.jobs_dn, p.njobs, pf_jobs_, p.h16, p.part, s);
                 }
                 if (lph == lph_n - 1) {   // edge0_patch6.py: the rest in the last pass
                     if (staging && j == nk - 1) ckc(cudaEventRecord(p.ev_done[l & 1], s), "stage done");

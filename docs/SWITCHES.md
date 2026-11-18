@@ -21,6 +21,7 @@ says otherwise, the speed effects were measured on earlier builds of this engine
 | `FNX_EXPERT_RAM_GIB` | 29.0 | 3.0 | Strata | the coldest N GiB of experts stay in RAM only; the rest sizes the VRAM expert slots (`off` with `FNX_ARENA=0`: all experts in VRAM) | none | about 18 of 47 GiB of experts fit the slots |
 | `FNX_EXPERT_PROFILE` | `engine/data/expert-routes.bin` | the same file under the source dir | Strata | per-expert use counts that rank which experts are coldest | none | (sFNX's file; a profile learned from our own use was slower: fresh 26.2 vs 31.0 at start) |
 | `FNX_PF_MOE_Q8` | 0 | 0 | Strata | 1: prompt-path experts through the decode kernels' q8_1 arithmetic | rounding | 0 takes the P100 prompt expert kernels |
+| `FNX_PF_MMQ` | 0 | 0 | ours | 1 selects ggml Pascal MMQ for regular IQ4_NL expert projections in prompt processing on two P100s. Requires `FNX_PF_MOE_Q8=0`. | lossy (activations quantized to 8 bits) | end-to-end speed unmeasured |
 | `FNX_PF_ATTN_DEC` | 0 | 0 | Strata | 1: prompt-path attention through the decode kernels | rounding | 0 takes the P100 prompt attention (`att` 6,338 → 1,520 ms a pass) |
 | `FNX_PF_GDN_CHUNK` | 0 | 1 | Strata | the prompt path's delta rule in sub-chunks (1) or whole (0) | rounding | 0 is what all our rounds ran |
 | `FNX_PROF` | 0 | 0 | ours | timing stamps and VRAM reports in the log (costs about 2 % of a window; some lines are in Slovenian) | none | keep 0 when measuring |

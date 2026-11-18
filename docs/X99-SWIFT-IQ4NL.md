@@ -15,3 +15,17 @@
 | X99 | 2 | Swift 1.5 IQ4_NL | 45.77 | 54.20 | 53.60 | 980.2 | 35.6 | 1/2 |
 | X99 | 3 | ISTA-DASLab GSQ-RCO IQ3_S | 76.65 | 142.85 | 146.75 | 1105.3 | 76.6 | 2/2 |
 | X99 | 3 | Swift 1.5 IQ4_NL | 66.25 | 112.75 | 121.00 | 1096.5 | 55.2 | 1/2 |
+
+## Experimental Pascal MMQ
+
+Build the two-card engine with `CARDS=2 PF_JOB=96 bash build.sh`. Set `FNX_PF_MMQ=1` in the Swift run profile to select ggml's Pascal IQ4_NL tile loader, quantized dot product and output writer for regular routed-expert prefill. Gate/up packs each input row once and shares it between its routed experts. Down packs the SwiGLU rows and handles each card's 320-column slice. Both use the existing expert pointer tables. The default is `0`. Keep `FNX_PF_MOE_Q8=0` in both benchmark profiles.
+
+The standalone numerical check uses one P100 and synthetic IQ4_NL weights. It covers the 2,560-column gate/up and 320-column down projections, partial tiles, repeated inputs, scattered outputs and both forms of expert addressing.
+
+```sh
+cmake -S . -B build -DSTRATA_BUILD_TESTS=ON
+cmake --build build --target split_p100_mmq_test
+CUDA_VISIBLE_DEVICES=0 ./build/split/split_p100_mmq_test
+```
+
+For the application comparison use two P100s at 185 W, the same NVMe checkpoint and the original `fresh,edit,long` benchmark. Run once with each switch setting and compare edit correctness as well as throughput. Prompt processing quantizes activations and may change the model's answers. The results table above uses the original FP16 expert kernel.
