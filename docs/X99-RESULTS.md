@@ -20,6 +20,8 @@
 | X99, 2 GPUs, prefetch 2 + four lookup sources | 59.72 | 85.00 | 87.40 | 974.3 | 52.7 |
 | X99, 2 GPUs, prefetch 2 + four sources + longer proposals | 59.64 | 83.45 | 86.70 | 974.0 | 50.8 |
 | X99, 2 GPUs, prefetch 2 + six blocks + four lookup sources | 59.68 | 85.10 | 87.45 | 990.6 | 51.7 |
+| X99, 2 GPUs, same profile, eight-token index off | 59.71 | 85.10 | 87.45 | 988.6 | 53.0 |
+| X99, 2 GPUs, same profile, eight-token index on | 59.67 | 83.75 | 86.75 | 990.5 | 51.4 |
 
 ## Three GPUs on X99
 
