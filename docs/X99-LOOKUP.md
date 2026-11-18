@@ -37,3 +37,10 @@ On the two P100s, the isolated four-source run generated at 85.00 tok/s on Pytho
 With a single request in flight (`--batch 1`), `FNX_LOOKUP_INDEX8=1` also considers the four most recent earlier occurrences of the last eight tokens. The CPU index is private to each generation and includes only the prompt and accepted output. The longest eligible history wins, with the most recent occurrence breaking ties. The default is zero. [Basalt suffix lookup](https://github.com/jesdga95/basalt/blob/899e820af777705cd29b35b1deb8612f24c42c5e/include/basalt/spec/suffix_drafter.hpp)
 
 For this A/B, use the same executable and two-card IQ3_S profile for both runs. Set `FNX_PREFETCH_WANT=2`, `FNX_PF_PASS=6`, `FNX_PF_TAIL_MIB=3750`, `FNX_CKPT_EVERY=24576`, `FNX_LOOKUP_SOURCES=4` and `FNX_LOOKUP_EXTEND_MIN=0`. Change only `FNX_LOOKUP_INDEX8` between zero and one. Run the benchmark above with `--tests fresh,edit,long` after each fresh load.
+
+| Eight-token index | Fresh tok/s | Python edit tok/s | Markdown edit tok/s | 38,862-token prefill tok/s | Writing after prefill tok/s | Python / Markdown verification rounds |
+|---|---:|---:|---:|---:|---:|---:|
+| Off | 59.71 | 85.10 | 87.45 | 988.6 | 53.0 | 92 / 95 |
+| On | 59.67 | 83.75 | 86.75 | 990.5 | 51.4 | 93 / 95 |
+
+Both profiles produced byte-identical validated Python and Markdown texts. The Python edit took one extra verification round with the index. The Markdown edit took the same number. Keep the index disabled for this workload.
