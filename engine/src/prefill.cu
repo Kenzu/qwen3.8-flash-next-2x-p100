@@ -1450,6 +1450,8 @@ void Engine::prefill(const std::vector<int>& tokens, int after) {
     embed(0, ch);
     for (size_t i = 0, k = 0; i < nt; i += per, ++k) {
         std::vector<PfChunk> next = chunks_of(i + per, (int) ((k + 1) & 1));
+        // A progress callback can decode another lane and return these slots to the expert cache.
+        pf_tails(true);
         prefill_pass(ch, staging, [&] { embed(i + per, next); });
         size_t e = i;
         for (const PfChunk& c : ch) {
